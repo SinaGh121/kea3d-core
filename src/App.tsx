@@ -2760,24 +2760,26 @@ export default function App() {
         <SheetContent
           side={compactLayout ? 'bottom' : 'right'}
           className={cn(
-            'gap-0 overflow-hidden',
+            'min-w-0 gap-0 overflow-hidden',
             compactLayout ? 'h-[85dvh] rounded-t-2xl border-x' : 'w-[min(620px,90vw)] sm:max-w-[620px]',
           )}
+          style={compactLayout ? { height: 'min(85dvh, 48rem)' } : undefined}
         >
           <SheetHeader className="shrink-0 border-b pr-12">
             <SheetTitle>{legalDocument ? legalDocuments[legalDocument].title : 'Legal document'}</SheetTitle>
             <SheetDescription>{legalDocument ? legalDocuments[legalDocument].description : undefined}</SheetDescription>
           </SheetHeader>
-          <ScrollArea
-            type="always"
+          <div
+            data-testid="legal-document-scroll"
+            role="region"
             aria-label="Legal document"
-            className="min-h-0 flex-1 touch-pan-y pr-2"
-            viewportClassName="absolute inset-0 size-auto"
+            tabIndex={0}
+            className="min-h-0 min-w-0 flex-1 touch-pan-y overflow-x-hidden overflow-y-scroll overscroll-contain [scrollbar-gutter:stable]"
           >
-            <pre className="whitespace-pre-wrap break-words p-4 pr-6 font-mono text-[11px] leading-relaxed text-foreground">
+            <pre className="m-0 w-full min-w-0 max-w-full whitespace-pre-wrap p-4 pr-6 font-mono text-[11px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
               {legalDocumentContent}
             </pre>
-          </ScrollArea>
+          </div>
         </SheetContent>
       </Sheet>
       <Toaster theme={theme} position="bottom-right" closeButton />
