@@ -6,7 +6,7 @@ import { fileExtension, readFileBuffer } from './localFile';
 import { createLocalFileManager } from './localFileManager';
 import { threeMfUnitFromXml } from './threeMfUnit';
 import type { LinearUnit, LoadProgress, UpAxis } from './types';
-import { cadNoGeometryMessage, throwIfLoadCancelled } from './loadControl';
+import { blendCompatibilityMessage, cadNoGeometryMessage, isLoadCancellation, throwIfLoadCancelled } from './loadControl';
 import { parseMeshGeometryInWorker } from './loadMeshGeometry';
 import { createCadCacheKey, readCadCache, writeCadCache } from './cadCache';
 import { createArchiveEntryFilter } from './archiveSafety';
@@ -59,7 +59,13 @@ export async function loadModelFiles(
   const name = mainFile.name.replace(/\.[^.]+$/, '');
 
   if (extension === 'blend') {
-    const gltf = await loadAssimpFiles(files, buffer, mainFile, onProgress, renderer, signal);
+    let gltf;
+    try {
+      gltf = await loadAssimpFiles(files, buffer, mainFile, onProgress, renderer, signal);
+    } catch (error) {
+      if (isLoadCancellation(error)) throw error;
+      throw new Error(blendCompatibilityMessage(buffer), { cause: error });
+    }
     if (!gltf.scene.name.trim()) gltf.scene.name = name;
     return {
       scene: gltf.scene,

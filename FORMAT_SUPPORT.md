@@ -14,7 +14,7 @@ the features used by the authoring tool.
 | PLY | Compatible | Geometry and vertex colors. |
 | FBX | Compatible | Geometry, supported materials, external textures, and animation clips. |
 | COLLADA / DAE | Compatible | Geometry, supported materials, external textures, and animation clips. |
-| BLEND | Best effort | Compatibility conversion through Assimp. Blender features and newer file versions may require export to GLB in Blender. |
+| BLEND | Best effort | Compatibility conversion through Assimp. Blender features and newer file versions may require File > Export > glTF 2.0 (GLB) in Blender. Kea3D reports the detected Blender version when this fallback is required. |
 
 ## Planned Kea3D project format
 
