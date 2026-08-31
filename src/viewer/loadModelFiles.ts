@@ -59,12 +59,14 @@ export async function loadModelFiles(
   const name = mainFile.name.replace(/\.[^.]+$/, '');
 
   if (extension === 'blend') {
+    // The worker owns the transferred source buffer, so derive diagnostics before conversion.
+    const compatibilityMessage = blendCompatibilityMessage(buffer);
     let gltf;
     try {
       gltf = await loadAssimpFiles(files, buffer, mainFile, onProgress, renderer, signal);
     } catch (error) {
       if (isLoadCancellation(error)) throw error;
-      throw new Error(blendCompatibilityMessage(buffer), { cause: error });
+      throw new Error(compatibilityMessage, { cause: error });
     }
     if (!gltf.scene.name.trim()) gltf.scene.name = name;
     return {
