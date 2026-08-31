@@ -1651,13 +1651,28 @@ export default function App() {
         onlyVisible: exportScope === 'visible',
         includeAnimations: exportAnimations,
       });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${modelInfo.fileName.replace(/\.[^.]+$/, '')}-fixed.glb`;
-      link.click();
+      const suggestedName = `${modelInfo.fileName.replace(/\.[^.]+$/, '')}-fixed.glb`;
+      if (nativeShell) {
+        const [{ save }, { writeFile }] = await Promise.all([
+          import('@tauri-apps/plugin-dialog'),
+          import('@tauri-apps/plugin-fs'),
+        ]);
+        const destination = await save({
+          title: 'Export GLB',
+          defaultPath: suggestedName,
+          filters: [{ name: 'Binary glTF', extensions: ['glb'] }],
+        });
+        if (!destination) return;
+        await writeFile(destination, new Uint8Array(await blob.arrayBuffer()));
+      } else {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = suggestedName;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      }
       toast.success(exportScope === 'visible' ? 'Visible objects exported to GLB' : 'Complete model exported to GLB');
-      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
     } catch (exportError) {
       showError(exportError instanceof Error ? exportError.message : 'The corrected model could not be exported.');
     } finally {

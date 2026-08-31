@@ -1,7 +1,7 @@
 {
   "name": "kea3d",
   "private": true,
-  "version": "0.1.62",
+  "version": "0.1.63",
   "type": "module",
   "scripts": {
     "sync:decoders": "node scripts/sync-three-decoders.mjs",
@@ -37,6 +37,7 @@
     "@fontsource-variable/sora": "^5.3.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.2",
     "@tauri-apps/plugin-opener": "^2.5.5",
     "assimpjs": "^0.0.10",
     "class-variance-authority": "^0.7.1",
