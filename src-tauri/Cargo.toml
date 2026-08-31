@@ -1,6 +1,6 @@
 [package]
 name = "kea3d"
-version = "0.1.58"
+version = "0.1.59"
 description = "Fast, private, local-first 3D and CAD viewer"
 authors = ["SinaGh121"]
 license = "MPL-2.0"
@@ -24,6 +24,7 @@ percent-encoding = "2"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2.7.2"
+tauri-plugin-opener = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

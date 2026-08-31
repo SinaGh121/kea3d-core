@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { BetweenHorizontalStart, Box, Boxes, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Code2, Copy, Download, Ellipsis, ExternalLink, Eye, EyeOff, FileBox, FlipHorizontal2, Focus, FolderOpen, Grid3X3, Info, Keyboard, Layers3, Maximize2, Move3D, Network, Orbit, PaintBucket, Pause, Play, Redo2, Repeat2, RotateCcw, Ruler, Scale, Scan, ScanBox, ScissorsLineDashed, Settings2, Share2, Sun, Undo2, Upload, View, X } from 'lucide-react';
 import packageMetadata from '../package.json';
 import { Button } from '@/components/ui/button';
@@ -34,6 +34,18 @@ import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, For
 const acceptedExtensions = ['.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
 const productWebsite = 'https://kea3d.com';
 const coreSourceRelease = `https://github.com/SinaGh121/kea3d-core/releases/tag/v${packageMetadata.version}`;
+const legalDocuments = {
+  license: {
+    title: 'Kea3D Core license',
+    description: 'Mozilla Public License 2.0 · bundled with this app',
+    load: () => import('../LICENSE?raw').then(({ default: content }) => content),
+  },
+  thirdParty: {
+    title: 'Third-party notices',
+    description: 'Licenses and attributions for bundled components',
+    load: () => import('../THIRD_PARTY_NOTICES.md?raw').then(({ default: content }) => content),
+  },
+} as const;
 type NativeOpenFile = { id: number; name: string; size: number; requiresStreaming: boolean; sourceUrl: string | null; nativeCadAvailable: boolean };
 type NativeOpenBytes = ArrayBuffer | Uint8Array | number[];
 type ThumbnailProviderStatus = { available: boolean; enabled: boolean; format: string };
@@ -689,6 +701,8 @@ export default function App() {
   const [lightingVisible, setLightingVisible] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [legalDocument, setLegalDocument] = useState<keyof typeof legalDocuments | null>(null);
+  const [legalDocumentContent, setLegalDocumentContent] = useState('');
   const [mobileDisplayVisible, setMobileDisplayVisible] = useState(false);
   const [mobileToolsVisible, setMobileToolsVisible] = useState(false);
   const androidNativeShell = nativeShell && /Android/i.test(navigator.userAgent);
@@ -721,6 +735,29 @@ export default function App() {
 
   const refreshCadCacheStats = useCallback(async () => {
     setCadCacheStats(await getCadCacheStats());
+  }, []);
+
+  const openExternalLink = useCallback((event: MouseEvent<HTMLAnchorElement>, url: string) => {
+    if (!nativeShell) return;
+    event.preventDefault();
+    void import('@tauri-apps/plugin-opener')
+      .then(({ openUrl }) => openUrl(url))
+      .catch((error: unknown) => {
+        console.error(error);
+        toast.error('Could not open the link in your browser.');
+      });
+  }, [nativeShell]);
+
+  const openLegalDocument = useCallback((document: keyof typeof legalDocuments) => {
+    setLegalDocument(document);
+    setLegalDocumentContent('Loading…');
+    void legalDocuments[document].load()
+      .then(setLegalDocumentContent)
+      .catch((error: unknown) => {
+        console.error(error);
+        setLegalDocumentContent('This document could not be loaded.');
+        toast.error('Could not load the legal document.');
+      });
   }, []);
 
   const refreshThumbnailProvider = useCallback(async () => {
@@ -2358,10 +2395,10 @@ export default function App() {
                       <div className="flex items-center justify-between gap-3"><dt className="text-muted-foreground">Core license</dt><dd className="font-medium">MPL 2.0</dd></div>
                     </dl>
                     <div className="grid grid-cols-2 gap-2">
-                      <Button asChild variant="outline" size="sm"><a href={productWebsite} target="_blank" rel="noreferrer"><ExternalLink /> Website</a></Button>
-                      <Button asChild variant="outline" size="sm"><a href={coreSourceRelease} target="_blank" rel="noreferrer"><Code2 /> Core source</a></Button>
-                      <Button asChild variant="outline" size="sm"><a href={`${import.meta.env.BASE_URL}KEA3D_MPL-2.0.txt`} target="_blank" rel="noreferrer"><Scale /> Core license</a></Button>
-                      <Button asChild variant="outline" size="sm"><a href={`${import.meta.env.BASE_URL}THIRD_PARTY_NOTICES.txt`} target="_blank" rel="noreferrer"><FileBox /> Third-party</a></Button>
+                      <Button asChild variant="outline" size="sm"><a href={productWebsite} target="_blank" rel="noreferrer" onClick={(event) => openExternalLink(event, productWebsite)}><ExternalLink /> Website</a></Button>
+                      <Button asChild variant="outline" size="sm"><a href={coreSourceRelease} target="_blank" rel="noreferrer" onClick={(event) => openExternalLink(event, coreSourceRelease)}><Code2 /> Core source</a></Button>
+                      <Button variant="outline" size="sm" onClick={() => openLegalDocument('license')}><Scale /> Core license</Button>
+                      <Button variant="outline" size="sm" onClick={() => openLegalDocument('thirdParty')}><FileBox /> Third-party</Button>
                     </div>
                     <div className="grid gap-1 text-[10px] leading-relaxed text-muted-foreground">
                       <p>This build contains the MPL-licensed Kea3D Core. No separately licensed Pro features are included.</p>
@@ -2719,6 +2756,25 @@ export default function App() {
 
         </section>
       </main>
+      <Sheet open={legalDocument !== null} onOpenChange={(open) => { if (!open) setLegalDocument(null); }}>
+        <SheetContent
+          side={compactLayout ? 'bottom' : 'right'}
+          className={cn(
+            'gap-0 overflow-hidden',
+            compactLayout ? 'h-[85dvh] rounded-t-2xl border-x' : 'w-[min(620px,90vw)] sm:max-w-[620px]',
+          )}
+        >
+          <SheetHeader className="shrink-0 border-b pr-12">
+            <SheetTitle>{legalDocument ? legalDocuments[legalDocument].title : 'Legal document'}</SheetTitle>
+            <SheetDescription>{legalDocument ? legalDocuments[legalDocument].description : undefined}</SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="min-h-0 flex-1">
+            <pre className="whitespace-pre-wrap break-words p-4 pr-6 font-mono text-[11px] leading-relaxed text-foreground">
+              {legalDocumentContent}
+            </pre>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
       <Toaster theme={theme} position="bottom-right" closeButton />
     </TooltipProvider>
   );

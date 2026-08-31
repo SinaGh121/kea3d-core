@@ -34,6 +34,7 @@ Windows packages that include the thumbnail provider must also include
 ## Application shell
 
 - Tauri — Apache-2.0 OR MIT — <https://github.com/tauri-apps/tauri>
+- Tauri Opener plugin — Apache-2.0 OR MIT — <https://github.com/tauri-apps/plugins-workspace>
 - Windows packages use the installed Microsoft Edge WebView2 Runtime.
 
 This notice is informational and does not replace the complete license texts
