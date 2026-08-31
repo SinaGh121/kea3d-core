@@ -2768,7 +2768,12 @@ export default function App() {
             <SheetTitle>{legalDocument ? legalDocuments[legalDocument].title : 'Legal document'}</SheetTitle>
             <SheetDescription>{legalDocument ? legalDocuments[legalDocument].description : undefined}</SheetDescription>
           </SheetHeader>
-          <ScrollArea className="min-h-0 flex-1">
+          <ScrollArea
+            type="always"
+            aria-label="Legal document"
+            className="min-h-0 flex-1 touch-pan-y pr-2"
+            viewportClassName="absolute inset-0 size-auto"
+          >
             <pre className="whitespace-pre-wrap break-words p-4 pr-6 font-mono text-[11px] leading-relaxed text-foreground">
               {legalDocumentContent}
             </pre>
