@@ -1,0 +1,30 @@
+[package]
+name = "kea3d"
+version = "0.1.58"
+description = "Fast, private, local-first 3D and CAD viewer"
+authors = ["SinaGh121"]
+license = "MPL-2.0"
+repository = "https://github.com/SinaGh121/kea3d"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "kea3d_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+percent-encoding = "2"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2.7.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }

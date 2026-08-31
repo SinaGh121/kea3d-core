@@ -1,0 +1,75 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Kea3D",
+  "version": "0.1.58",
+  "identifier": "app.kea3d.viewer.v2",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Kea3D",
+        "width": 800,
+        "height": 600,
+        "minWidth": 840,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost ws: blob:; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "GraphicsAndDesign",
+    "shortDescription": "Fast, private, local-first 3D and CAD viewer.",
+    "longDescription": "Kea3D is a fast, private, local-first viewer for common 3D mesh, scene, and CAD formats.",
+    "fileAssociations": [
+      {
+        "ext": [
+          "glb",
+          "gltf",
+          "stl",
+          "3mf",
+          "obj",
+          "ply",
+          "fbx",
+          "dae",
+          "step",
+          "stp",
+          "iges",
+          "igs",
+          "brep",
+          "blend"
+        ],
+        "name": "Kea3D model",
+        "description": "3D model opened with Kea3D",
+        "role": "Viewer"
+      }
+    ],
+    "licenseFile": "../LICENSE",
+    "resources": [
+      "../THIRD_PARTY_NOTICES.md",
+      "../public/licenses/*"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}
