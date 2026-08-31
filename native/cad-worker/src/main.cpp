@@ -575,7 +575,7 @@ int wmain(const int argc, wchar_t** argv) {
     const std::string display_name = source_name.empty()
       ? wide_to_utf8(arguments.input.stem().wstring()) : source_name;
     const std::string manifest =
-      "{\"schema\":\"kea3d-cad-manifest-v1\",\"rootId\":\"root\",\"nodes\":[{\"id\":\"root\"," 
+      "{\"schema\":\"kea3d-cad-manifest-v1\",\"rootId\":\"root\",\"nodes\":[{\"id\":\"root\","
       "\"parentId\":null,\"sourceName\":" +
       (source_name.empty() ? std::string("null") : "\"" + json_escape(source_name) + "\"") +
       ",\"displayName\":\"" + json_escape(display_name) +
