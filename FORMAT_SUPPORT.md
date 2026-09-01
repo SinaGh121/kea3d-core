@@ -5,6 +5,7 @@ the features used by the authoring tool.
 
 | Format | Status | Notes |
 | --- | --- | --- |
+| KEA3D Project v1 | Foundation | Validated local JSON manifest with one root GLB instance. Select the `.kea3d` manifest and referenced GLB together. Multi-instance assembly resolution and Save/Save As are planned next. |
 | GLB / glTF | Primary | Scenes, PBR materials, textures, animations, Draco, Meshopt, and KTX2/Basis. Select external `.bin` and texture files with `.gltf`. |
 | STEP / STP | Primary CAD | Worker-based OpenCascade tessellation; assemblies and colors depend on source metadata. |
 | IGES / IGS / BREP | Primary CAD | Worker-based OpenCascade tessellation. |
@@ -16,15 +17,16 @@ the features used by the authoring tool.
 | COLLADA / DAE | Compatible | Geometry, supported materials, external textures, and animation clips. |
 | BLEND | Best effort | Compatibility conversion through Assimp. Blender features and newer file versions may require File > Export > glTF 2.0 (GLB) in Blender. Kea3D reports the detected Blender version when this fallback is required. |
 
-## Planned Kea3D project format
+## Kea3D project format
 
-`.kea3d` is the approved, but not yet implemented, assembly-project format. It
-will be a versioned UTF-8 JSON manifest that references reusable project-local
-GLB components, instances them, and resolves anchor-to-anchor attachments. It is
-not a geometry interchange format and must not be shown as currently supported
-until the parser, validator, resolver, save flow, and round-trip tests ship.
+`.kea3d` is a versioned UTF-8 JSON assembly-project manifest that references
+reusable project-local GLB components. Version 1 schema parsing, bounded path/ID
+validation, graph validation, and one-root-resource opening are implemented.
+The manifest and GLB must currently be selected together; missing resources are
+reported without replacing the open model. Multi-instance transforms, anchors,
+recovery UI, Save/Save As, and flattened assembly export remain planned.
 
-The authoritative draft contract and implementation gates are in
+The authoritative contract and implementation gates are in
 `KEA3D_PROJECT_FORMAT.md`.
 
 Corrected-copy export is GLB. It preserves supported scene data and applies the

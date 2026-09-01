@@ -31,7 +31,7 @@ const EMBEDDED_CAD_WORKER: &[u8] =
 
 const SUPPORTED_MODEL_EXTENSIONS: &[&str] = &[
     "glb", "gltf", "stl", "3mf", "obj", "ply", "fbx", "dae", "step", "stp", "iges", "igs", "brep",
-    "blend",
+    "blend", "kea3d",
 ];
 const PICKER_RESOURCE_EXTENSIONS: &[&str] =
     &["mtl", "bin", "png", "jpg", "jpeg", "webp", "avif", "ktx2"];
@@ -985,19 +985,25 @@ mod tests {
         let root = std::env::temp_dir().join(format!("kea3d-native-open-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("model.GLB"), b"glb").unwrap();
+        std::fs::write(root.join("assembly.kea3d"), b"{}").unwrap();
         std::fs::write(root.join("notes.txt"), b"text").unwrap();
 
         let state = NativeOpenState::default();
         let count = enqueue_open_files(
             &state,
-            [OsString::from("model.GLB"), OsString::from("notes.txt")],
+            [
+                OsString::from("model.GLB"),
+                OsString::from("assembly.kea3d"),
+                OsString::from("notes.txt"),
+            ],
             &root,
         );
 
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         let pending = state.pending.lock().unwrap();
         assert_eq!(pending.front().unwrap().name, "model.GLB");
         assert_eq!(pending.front().unwrap().size, 3);
+        assert_eq!(pending.get(1).unwrap().name, "assembly.kea3d");
 
         drop(pending);
         std::fs::remove_dir_all(root).unwrap();

@@ -2,9 +2,14 @@
 
 ## Status
 
-Approved product and architecture direction. The version-one schema below is a
-draft contract and must not be treated as stable until its parser, validator,
-round-trip tests, and migration policy are implemented.
+Version one is frozen in source at `public/schemas/project/v1.json`. The pure
+parser enforces the same bounded IDs, paths, resources, instances, and acyclic
+attachment graph before any visible model is replaced. Future changes require
+an explicit migration and backward-compatibility fixture.
+
+The current opening slice intentionally resolves one root GLB selected with its
+manifest. Multi-instance transform evaluation, folder access, recovery UI,
+Save/Save As, and canonical website publication remain later gates.
 
 `ANCHOR_ATTACHMENT_SYSTEM.md` is the detailed authority for Anchor,
 Attachment, and Joint semantics. The core rule is that Anchors define location

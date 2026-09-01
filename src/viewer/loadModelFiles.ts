@@ -12,6 +12,7 @@ import { createCadCacheKey, readCadCache, writeCadCache } from './cadCache';
 import { createArchiveEntryFilter } from './archiveSafety';
 import { sanitizeCadImportResult } from './cadResult';
 import { consumePreparedModel } from './preparedModel';
+import { decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, resolveProjectResourceFile } from '../project/projectFormat';
 
 interface LoadedModelSource {
   scene: Object3D;
@@ -33,6 +34,26 @@ export async function loadModelFiles(
     return {
       ...prepared.model,
       mainFile: prepared.file,
+    };
+  }
+  const projectFiles = files.filter((file) => fileExtension(file.name) === 'kea3d');
+  if (projectFiles.length > 1) throw new Error('Choose one .kea3d project at a time.');
+  const projectFile = projectFiles[0];
+  if (projectFile) {
+    if (projectFile.size > KEA3D_PROJECT_MAX_BYTES) throw new Error(`Invalid Kea3D project: document exceeds ${KEA3D_PROJECT_MAX_BYTES} bytes.`);
+    const projectBuffer = await readFileBuffer(projectFile, onProgress, signal);
+    throwIfLoadCancelled(signal);
+    const project = decodeKea3dProject(projectBuffer);
+    const resourceFile = resolveProjectResourceFile(project, projectFile, files);
+    const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
+    if (!gltf.scene.name.trim()) gltf.scene.name = project.name;
+    return {
+      scene: gltf.scene,
+      animations: gltf.animations,
+      mainFile: projectFile,
+      totalSize: projectFile.size + resourceFile.size,
+      sourceUnit: 'm',
+      upAxis: 'y',
     };
   }
   const gltfFile = files.find((file) => ['glb', 'gltf'].includes(fileExtension(file.name)));

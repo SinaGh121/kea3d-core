@@ -2,14 +2,6 @@
 
 A fast, local-first 3D and CAD viewer in development.
 
-## Public Core source
-
-This repository contains the buildable MPL-2.0 Free/Core source published for
-Kea3D releases. Internal development history, planning documents, private model
-fixtures, build artifacts, and separately licensed future Pro modules are not
-part of this repository. Each release tag corresponds to the version shown in
-Kea3D's About panel.
-
 ## Run locally
 
 ```powershell
@@ -22,8 +14,10 @@ Then open the local URL shown by Vite and drop a supported model. Current import
 - Mesh and scene: GLB/glTF, STL, 3MF, OBJ/MTL, PLY, FBX, and COLLADA/DAE.
 - CAD: STEP/STP, IGES/IGS, and BREP.
 - Compatibility conversion: BLEND through a lazy local Assimp worker. New or feature-heavy Blender files may still need export to GLB.
+- Project foundation: validated `.kea3d` Project v1 manifests with one root GLB selected alongside the manifest.
 
 Select companion material, binary, and texture files together with the main model when the format references external files.
+For the current project slice, select the `.kea3d` manifest and its referenced root GLB together; missing files are reported without replacing the model already open.
 
 After selecting a scene object, **Set material** provides 39 internally authored numerical PBR presets across basics, metals, plastics/rubber, glass, and emissive LEDs. Applicable families expose independent Dark/Standard/Light tone and Matte/Satin/Gloss or Brushed/Satin/Polished finish controls, with advanced numerical PBR adjustment. Changes can target the selected object or all meshes that shared its original material, support bounded Undo/Redo through the panel or Ctrl/Command shortcuts, and are included only when saving a new corrected GLB copy.
 

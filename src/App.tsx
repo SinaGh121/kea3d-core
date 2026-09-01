@@ -31,7 +31,7 @@ import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, mate
 import { isNativeShell } from '@/nativeShell';
 import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
 
-const acceptedExtensions = ['.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
+const acceptedExtensions = ['.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
 const productWebsite = 'https://kea3d.com';
 const coreSourceRelease = `https://github.com/SinaGh121/kea3d-core/releases/tag/v${packageMetadata.version}`;
 const legalDocuments = {
@@ -917,7 +917,7 @@ export default function App() {
     loadAbortRef.current?.abort();
     const controller = new AbortController();
     loadAbortRef.current = controller;
-    setLoadingName(files.find((file) => /\.(glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model');
+    setLoadingName(files.find((file) => /\.(kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model');
     setLoadingBytes(files.reduce((total, file) => total + file.size, 0));
     setProgress({ stage: 'preparing', value: 0.05 });
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -1020,7 +1020,7 @@ export default function App() {
           const { Channel, invoke } = await import('@tauri-apps/api/core');
           const pending = await invoke<NativeOpenFile[]>('take_pending_open_files');
           if (pending.length === 0) return;
-          setLoadingName(pending.find((entry) => /\.(glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(entry.name))?.name ?? 'Local model');
+          setLoadingName(pending.find((entry) => /\.(kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(entry.name))?.name ?? 'Local model');
           setLoadingBytes(pending.reduce((total, entry) => total + entry.size, 0));
           setProgress({ stage: 'reading' });
           setReadingNativeFile(true);
@@ -1209,7 +1209,7 @@ export default function App() {
         directory: false,
         filters: [{
           name: '3D models',
-          extensions: ['glb', 'gltf', 'stl', '3mf', 'obj', 'mtl', 'ply', 'fbx', 'dae', 'step', 'stp', 'iges', 'igs', 'brep', 'blend', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'ktx2'],
+          extensions: ['kea3d', 'glb', 'gltf', 'stl', '3mf', 'obj', 'mtl', 'ply', 'fbx', 'dae', 'step', 'stp', 'iges', 'igs', 'brep', 'blend', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'ktx2'],
         }],
       });
       if (!selected) return;
@@ -2048,7 +2048,7 @@ export default function App() {
               <h1 className="text-3xl font-semibold tracking-tight max-md:text-2xl">Open a 3D model</h1>
               <p className="mt-1.5 mb-5 text-sm text-muted-foreground">{initialSharedView ? 'Shared view ready · choose the same local model' : compactLayout ? 'Choose files from your device' : 'Drop files here or choose them from your device'}</p>
               <Button size="lg" className="rounded-xl" onClick={() => void chooseModelFiles()}><FolderOpen /> Choose files</Button>
-              <small className="mt-4 max-w-sm text-[11px] leading-relaxed text-muted-foreground">STEP · IGES · GLB · STL · 3MF · OBJ · PLY · FBX · DAE · BLEND</small>
+              <small className="mt-4 max-w-sm text-[11px] leading-relaxed text-muted-foreground">KEA3D · STEP · IGES · GLB · STL · 3MF · OBJ · PLY · FBX · DAE · BLEND</small>
               <small className="mt-1 text-[11px] text-muted-foreground">Processed locally · Nothing is uploaded</small>
             </section>
           )}
