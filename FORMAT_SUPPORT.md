@@ -5,7 +5,7 @@ the features used by the authoring tool.
 
 | Format | Status | Notes |
 | --- | --- | --- |
-| KEA3D Project v1 | Fixed assemblies | Validated local JSON manifest with reusable GLB instances and deterministic anchor-to-anchor attachments. Select the manifest and referenced GLBs together. Save/Save As and joints remain planned. |
+| KEA3D Project v1 | Fixed assemblies | Validated reusable GLB instances and deterministic anchor attachments. Desktop resolves project-relative GLBs automatically; web/PWA supports explicit project-folder selection. Save/Save As and joints remain planned. |
 | GLB / glTF | Primary | Scenes, PBR materials, textures, animations, Draco, Meshopt, and KTX2/Basis. Select external `.bin` and texture files with `.gltf`. |
 | STEP / STP | Primary CAD | Worker-based OpenCascade tessellation; assemblies and colors depend on source metadata. |
 | IGES / IGS / BREP | Primary CAD | Worker-based OpenCascade tessellation. |
@@ -22,10 +22,11 @@ the features used by the authoring tool.
 `.kea3d` is a versioned UTF-8 JSON assembly-project manifest that references
 reusable project-local GLB components. Version 1 schema parsing, bounded path/ID
 validation, graph validation, multi-resource opening, anchor discovery, and
-fixed attachment transforms are implemented. The manifest and referenced GLBs
-must currently be selected together; missing resources or anchors are reported
-without replacing the open model. Folder recovery, anchor authoring, Save/Save
-As, joints, and flattened assembly export remain planned.
+fixed attachment transforms are implemented. Desktop filesystem opens resolve
+safe project-relative GLBs automatically. Web/PWA provides an explicit project-
+folder picker and still supports selecting companions together. Missing resources
+or anchors are reported without replacing the open model. Per-resource recovery,
+anchor authoring, Save/Save As, joints, and flattened export remain planned.
 
 The authoritative contract and implementation gates are in
 `KEA3D_PROJECT_FORMAT.md`.

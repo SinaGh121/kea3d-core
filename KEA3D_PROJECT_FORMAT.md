@@ -9,9 +9,10 @@ an explicit migration and backward-compatibility fixture.
 
 The current opening slice resolves all referenced GLBs explicitly selected with
 the manifest, discovers version-one anchor metadata, and evaluates fixed
-multi-instance attachments without mutating source assets. Folder access,
-recovery UI, anchor authoring, Save/Save As, joints, and canonical website
-publication remain later gates.
+multi-instance attachments without mutating source assets. Desktop project-
+relative resolution and explicit web/PWA project-folder selection are implemented.
+Per-resource recovery UI, anchor authoring, Save/Save As, joints, and canonical
+website publication remain later gates.
 
 `ANCHOR_ATTACHMENT_SYSTEM.md` is the detailed authority for Anchor,
 Attachment, and Joint semantics. The core rule is that Anchors define location
@@ -165,19 +166,25 @@ Resource URIs use forward-slash project-relative paths such as
 - paths that escape the selected project root;
 - duplicate normalized paths and ambiguous case-only collisions.
 
-Desktop builds may resolve relative files from the project directory. Browsers
-cannot silently read adjacent files: the web/PWA flow must ask the user to select
-the project folder or all required companion files, then resolve them through the
+Desktop builds resolve referenced files from the project directory after applying
+the same bounded URI rules, canonicalizing every path, rejecting paths outside
+the project root, and loading only resources referenced by instances. Browsers
+cannot silently read adjacent files: the web/PWA flow asks the user to select the
+project folder or all required companion files and resolves them through the
 existing local-file map. A `.kea3d` file never grants filesystem access.
 
 ## Missing and changed resources
 
-If a component is missing or changed, Kea3D must:
+The current v1 loader is atomic: if a referenced component is missing or the
+project is invalid, Kea3D preserves the already-open model and reports the
+problem without partially replacing the scene.
 
-1. preserve its resource and instance records;
-2. load the rest of the valid assembly;
-3. show one clear, non-blocking project warning;
-4. allow the user to locate, replace, or intentionally remove the resource;
+The planned recovery flow must:
+
+1. preserve the missing resource and instance records;
+2. show one clear, non-blocking project warning;
+3. allow the user to locate, replace, or intentionally remove the resource;
+4. load the rest of the valid assembly only after an explicit recovery choice;
 5. avoid overwriting the original project during recovery.
 
 Invalid resources or instances must not cause valid source files to be modified.
@@ -257,7 +264,7 @@ archive tests are release gates.
 1. Freeze JSON Schema v1 and canonical path/ID rules. **Complete.**
 2. Add pure parser, validator, graph, and transform-resolution modules. **Complete for fixed attachments.**
 3. Add GLB anchor discovery and authoring with stable metadata. **Discovery complete; authoring remains.**
-4. Add multi-file/folder project opening with missing-resource recovery. **Explicit companion-file selection complete; folder recovery remains.**
+4. Add multi-file/folder project opening with missing-resource recovery. **Desktop relative resolution, web/PWA folder selection, and atomic missing-file reporting complete; per-resource recovery remains.**
 5. Add instances and attachment evaluation without mutating source assets. **Complete for fixed attachments.**
 6. Add transactional save, Save As, and migration fixtures.
 7. Add flattened GLB export and reopen validation.

@@ -46,7 +46,7 @@ const legalDocuments = {
     load: () => import('../THIRD_PARTY_NOTICES.md?raw').then(({ default: content }) => content),
   },
 } as const;
-type NativeOpenFile = { id: number; name: string; size: number; requiresStreaming: boolean; sourceUrl: string | null; nativeCadAvailable: boolean };
+type NativeOpenFile = { id: number; name: string; size: number; requiresStreaming: boolean; sourceUrl: string | null; nativeCadAvailable: boolean; relativePath: string | null };
 type NativeOpenBytes = ArrayBuffer | Uint8Array | number[];
 type ThumbnailProviderStatus = { available: boolean; enabled: boolean; format: string };
 const windowsThumbnailPreferenceKey = 'kea3d.windows-thumbnails.preference.v1';
@@ -613,6 +613,7 @@ export default function App() {
   const viewerRef = useRef<Viewer | null>(null);
   const viewerPromiseRef = useRef<Promise<Viewer> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const projectFolderInputRef = useRef<HTMLInputElement>(null);
   const settingsInputRef = useRef<HTMLInputElement>(null);
   const loadAbortRef = useRef<AbortController | null>(null);
   const nativeOpenQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -1004,6 +1005,7 @@ export default function App() {
         setLoadingName(null);
         setLoadingBytes(0);
         if (inputRef.current) inputRef.current.value = '';
+        if (projectFolderInputRef.current) projectFolderInputRef.current.value = '';
       }
     }
   }, [compactLayout, displayMode, gridVisible, projection, rotationMode]);
@@ -1157,6 +1159,9 @@ export default function App() {
               buffer = normalizeNativeOpenBytes(response);
             }
             const file = new File([buffer], entry.name, { lastModified: Date.now() });
+            if (entry.relativePath) {
+              Object.defineProperty(file, 'webkitRelativePath', { value: entry.relativePath });
+            }
             registerPreloadedFileBuffer(file, buffer);
             files.push(file);
           }
@@ -1220,6 +1225,10 @@ export default function App() {
       showError(error instanceof Error ? error.message : String(error));
     }
   }, [desktopNativeShell]);
+
+  const chooseProjectFolder = useCallback(() => {
+    projectFolderInputRef.current?.click();
+  }, []);
 
   const handleDrop = (event: DragEvent<HTMLElement>) => {
     event.preventDefault(); setDragging(false); void loadFiles(event.dataTransfer.files);
@@ -1878,6 +1887,8 @@ export default function App() {
           />
           <input ref={inputRef} className="sr-only" type="file" multiple accept={acceptedExtensions} aria-label="Choose 3D model files"
             onChange={(event) => event.target.files && void loadFiles(event.target.files)} />
+          <input ref={(element) => { projectFolderInputRef.current = element; element?.setAttribute('webkitdirectory', ''); }} className="sr-only" type="file" multiple accept={acceptedExtensions} aria-label="Choose Kea3D project folder"
+            onChange={(event) => event.target.files && void loadFiles(event.target.files)} />
           <input ref={settingsInputRef} className="sr-only" type="file" accept=".json,application/json" aria-label="Import Kea3D settings"
             onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSettings(file); }} />
 
@@ -2048,6 +2059,7 @@ export default function App() {
               <h1 className="text-3xl font-semibold tracking-tight max-md:text-2xl">Open a 3D model</h1>
               <p className="mt-1.5 mb-5 text-sm text-muted-foreground">{initialSharedView ? 'Shared view ready · choose the same local model' : compactLayout ? 'Choose files from your device' : 'Drop files here or choose them from your device'}</p>
               <Button size="lg" className="rounded-xl" onClick={() => void chooseModelFiles()}><FolderOpen /> Choose files</Button>
+              {!nativeShell && <Button variant="ghost" size="sm" className="mt-1.5" onClick={chooseProjectFolder}><Boxes /> Open project folder</Button>}
               <small className="mt-4 max-w-sm text-[11px] leading-relaxed text-muted-foreground">KEA3D · STEP · IGES · GLB · STL · 3MF · OBJ · PLY · FBX · DAE · BLEND</small>
               <small className="mt-1 text-[11px] text-muted-foreground">Processed locally · Nothing is uploaded</small>
             </section>

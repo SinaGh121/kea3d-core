@@ -1,8 +1,8 @@
 #[cfg(any(test, target_os = "android", target_os = "ios", target_os = "macos"))]
 use percent_encoding::percent_decode_str;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -57,6 +57,7 @@ struct PendingOpenFile {
     name: String,
     source: FilePath,
     size: u64,
+    relative_path: Option<String>,
 }
 
 struct ReadableOpenFile {
@@ -92,6 +93,26 @@ struct PendingOpenFileMetadata {
     requires_streaming: bool,
     source_url: Option<String>,
     native_cad_available: bool,
+    relative_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProjectResourceProbe {
+    id: String,
+    uri: String,
+}
+
+#[derive(Deserialize)]
+struct ProjectInstanceProbe {
+    resource: String,
+}
+
+#[derive(Deserialize)]
+struct ProjectDocumentProbe {
+    format: String,
+    version: u64,
+    resources: Vec<ProjectResourceProbe>,
+    instances: Vec<ProjectInstanceProbe>,
 }
 
 #[derive(Serialize)]
@@ -276,6 +297,132 @@ fn selected_model_path(argument: &OsStr, current_dir: &Path) -> Option<PathBuf> 
     candidate.canonicalize().ok()
 }
 
+fn project_resource_uri_is_safe(uri: &str) -> bool {
+    if uri.is_empty()
+        || uri.len() > 1024
+        || uri.contains('\\')
+        || uri.contains('?')
+        || uri.contains('#')
+        || uri.contains('%')
+        || uri.starts_with('/')
+        || uri.starts_with("//")
+        || uri.get(1..2) == Some(":")
+        || !uri.to_ascii_lowercase().ends_with(".glb")
+    {
+        return false;
+    }
+    uri.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && segment.chars().all(|character| {
+                character.is_ascii_alphanumeric()
+                    || matches!(
+                        character,
+                        ' ' | '_' | '.' | ',' | '+' | '@' | '(' | ')' | '\'' | '&' | '-'
+                    )
+            })
+    })
+}
+
+fn pending_path_file(
+    state: &NativeOpenState,
+    path: PathBuf,
+    relative_path: Option<String>,
+) -> Option<PendingOpenFile> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let size = path.metadata().ok()?.len();
+    Some(PendingOpenFile {
+        id: state.next_id.fetch_add(1, Ordering::Relaxed) + 1,
+        name,
+        source: FilePath::Path(path),
+        size,
+        relative_path,
+    })
+}
+
+fn project_open_files(state: &NativeOpenState, manifest_path: PathBuf) -> Vec<PendingOpenFile> {
+    let mut files = Vec::new();
+    let manifest_name = manifest_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+    if let Some(manifest) = pending_path_file(state, manifest_path.clone(), manifest_name) {
+        files.push(manifest);
+    }
+
+    let Ok(metadata) = manifest_path.metadata() else {
+        return files;
+    };
+    if metadata.len() > 2 * 1024 * 1024 {
+        return files;
+    }
+    let Ok(json) = std::fs::read(&manifest_path) else {
+        return files;
+    };
+    let Ok(project) = serde_json::from_slice::<ProjectDocumentProbe>(&json) else {
+        return files;
+    };
+    if project.format != "kea3d-project"
+        || project.version != 1
+        || project.resources.len() > 1024
+        || project.instances.len() > 10_000
+    {
+        return files;
+    }
+    let referenced = project
+        .instances
+        .into_iter()
+        .map(|instance| instance.resource)
+        .collect::<HashSet<_>>();
+    let Some(project_directory) = manifest_path.parent() else {
+        return files;
+    };
+    let Ok(project_root) = project_directory.canonicalize() else {
+        return files;
+    };
+    for resource in project.resources {
+        if !referenced.contains(&resource.id) {
+            continue;
+        }
+        if !project_resource_uri_is_safe(&resource.uri) {
+            continue;
+        }
+        let Ok(path) = project_directory.join(&resource.uri).canonicalize() else {
+            continue;
+        };
+        if !path.starts_with(&project_root) || !path.is_file() {
+            continue;
+        }
+        if let Some(file) = pending_path_file(state, path, Some(resource.uri)) {
+            files.push(file);
+        }
+    }
+    files
+}
+
+fn selected_open_files(state: &NativeOpenState, path: PathBuf) -> Vec<PendingOpenFile> {
+    if path
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("kea3d"))
+    {
+        project_open_files(state, path)
+    } else {
+        pending_path_file(state, path, None).into_iter().collect()
+    }
+}
+
+fn deduplicate_pending_paths(files: Vec<PendingOpenFile>) -> Vec<PendingOpenFile> {
+    let mut seen = HashSet::new();
+    files
+        .into_iter()
+        .filter(|file| match &file.source {
+            FilePath::Path(path) => seen.insert(path.clone()),
+            FilePath::Url(_) => true,
+        })
+        .collect()
+}
+
 fn enqueue_open_files(
     state: &NativeOpenState,
     arguments: impl IntoIterator<Item = OsString>,
@@ -284,17 +431,9 @@ fn enqueue_open_files(
     let files = arguments
         .into_iter()
         .filter_map(|argument| supported_model_path(&argument, current_dir))
-        .filter_map(|path| {
-            let name = path.file_name()?.to_string_lossy().into_owned();
-            let size = path.metadata().ok()?.len();
-            Some(PendingOpenFile {
-                id: state.next_id.fetch_add(1, Ordering::Relaxed) + 1,
-                name,
-                source: FilePath::Path(path),
-                size,
-            })
-        })
+        .flat_map(|path| selected_open_files(state, path))
         .collect::<Vec<_>>();
+    let files = deduplicate_pending_paths(files);
     let count = files.len();
     if count > 0 {
         state.pending.lock().unwrap().extend(files);
@@ -312,17 +451,9 @@ fn queue_open_file_paths(
     let files = paths
         .into_iter()
         .filter_map(|path| selected_model_path(OsStr::new(&path), &current_dir))
-        .filter_map(|path| {
-            let name = path.file_name()?.to_string_lossy().into_owned();
-            let size = path.metadata().ok()?.len();
-            Some(PendingOpenFile {
-                id: state.next_id.fetch_add(1, Ordering::Relaxed) + 1,
-                name,
-                source: FilePath::Path(path),
-                size,
-            })
-        })
+        .flat_map(|path| selected_open_files(&state, path))
         .collect::<Vec<_>>();
+    let files = deduplicate_pending_paths(files);
     let queued = files.len();
     if queued > 0 {
         state.pending.lock().unwrap().extend(files);
@@ -448,14 +579,7 @@ fn enqueue_open_urls(
     for url in urls {
         if let Ok(path) = url.to_file_path() {
             if let Some(path) = supported_model_path(path.as_os_str(), &current_dir) {
-                if let (Some(name), Ok(metadata)) = (path.file_name(), path.metadata()) {
-                    files.push(PendingOpenFile {
-                        id: state.next_id.fetch_add(1, Ordering::Relaxed) + 1,
-                        name: name.to_string_lossy().into_owned(),
-                        source: FilePath::Path(path),
-                        size: metadata.len(),
-                    });
-                }
+                files.extend(selected_open_files(state, path));
             }
             continue;
         }
@@ -480,9 +604,11 @@ fn enqueue_open_urls(
             name,
             source: FilePath::Url(url),
             size,
+            relative_path: None,
         });
     }
 
+    let files = deduplicate_pending_paths(files);
     let count = files.len();
     if count > 0 {
         state.pending.lock().unwrap().extend(files);
@@ -521,6 +647,7 @@ fn take_pending_open_files(
                 requires_streaming,
                 source_url,
                 native_cad_available,
+                relative_path: file.relative_path,
             }
         })
         .collect()
@@ -1005,6 +1132,42 @@ mod tests {
         assert_eq!(pending.front().unwrap().size, 3);
         assert_eq!(pending.get(1).unwrap().name, "assembly.kea3d");
 
+        drop(pending);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn expands_safe_project_resources_with_relative_paths() {
+        let root =
+            std::env::temp_dir().join(format!("kea3d-native-project-{}", std::process::id()));
+        let components = root.join("components");
+        std::fs::create_dir_all(&components).unwrap();
+        std::fs::write(components.join("base.glb"), b"glTF").unwrap();
+        std::fs::write(root.join("outside.glb"), b"glTF").unwrap();
+        std::fs::write(
+            root.join("assembly.kea3d"),
+            br#"{"format":"kea3d-project","version":1,"resources":[{"id":"base-model","uri":"components/base.glb"},{"id":"outside-model","uri":"../outside.glb"},{"id":"missing-model","uri":"components/missing.glb"}],"instances":[{"resource":"base-model"},{"resource":"outside-model"},{"resource":"missing-model"}]}"#,
+        ).unwrap();
+
+        let state = NativeOpenState::default();
+        let count = enqueue_open_files(
+            &state,
+            [
+                OsString::from("assembly.kea3d"),
+                OsString::from("components/base.glb"),
+            ],
+            &root,
+        );
+
+        assert_eq!(count, 2);
+        let pending = state.pending.lock().unwrap();
+        assert_eq!(pending[0].name, "assembly.kea3d");
+        assert_eq!(pending[0].relative_path.as_deref(), Some("assembly.kea3d"));
+        assert_eq!(pending[1].name, "base.glb");
+        assert_eq!(
+            pending[1].relative_path.as_deref(),
+            Some("components/base.glb")
+        );
         drop(pending);
         std::fs::remove_dir_all(root).unwrap();
     }
