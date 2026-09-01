@@ -7,9 +7,11 @@ parser enforces the same bounded IDs, paths, resources, instances, and acyclic
 attachment graph before any visible model is replaced. Future changes require
 an explicit migration and backward-compatibility fixture.
 
-The current opening slice intentionally resolves one root GLB selected with its
-manifest. Multi-instance transform evaluation, folder access, recovery UI,
-Save/Save As, and canonical website publication remain later gates.
+The current opening slice resolves all referenced GLBs explicitly selected with
+the manifest, discovers version-one anchor metadata, and evaluates fixed
+multi-instance attachments without mutating source assets. Folder access,
+recovery UI, anchor authoring, Save/Save As, joints, and canonical website
+publication remain later gates.
 
 `ANCHOR_ATTACHMENT_SYSTEM.md` is the detailed authority for Anchor,
 Attachment, and Joint semantics. The core rule is that Anchors define location
@@ -252,11 +254,11 @@ archive tests are release gates.
 
 ## Implementation sequence
 
-1. Freeze JSON Schema v1 and canonical path/ID rules.
-2. Add pure parser, validator, graph, and transform-resolution modules.
-3. Add GLB anchor discovery and authoring with stable metadata.
-4. Add multi-file/folder project opening with missing-resource recovery.
-5. Add instances and attachment evaluation without mutating source assets.
+1. Freeze JSON Schema v1 and canonical path/ID rules. **Complete.**
+2. Add pure parser, validator, graph, and transform-resolution modules. **Complete for fixed attachments.**
+3. Add GLB anchor discovery and authoring with stable metadata. **Discovery complete; authoring remains.**
+4. Add multi-file/folder project opening with missing-resource recovery. **Explicit companion-file selection complete; folder recovery remains.**
+5. Add instances and attachment evaluation without mutating source assets. **Complete for fixed attachments.**
 6. Add transactional save, Save As, and migration fixtures.
 7. Add flattened GLB export and reopen validation.
 8. Add bounded `.kea3dp` pack/unpack only after transparent external projects

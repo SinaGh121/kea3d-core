@@ -154,6 +154,11 @@ try {
     Assert-CommandSucceeded -Message 'Quality checks failed.'
   }
 
+  # Gradle/apksigner can append another signing block when an existing debug
+  # APK is reused, so remove only the exact generated output before rebuilding.
+  if (Test-Path -LiteralPath $sourceApk) {
+    Remove-Item -LiteralPath $sourceApk -Force
+  }
   npm run mobile:android:build -- --debug --apk --target aarch64
   Assert-CommandSucceeded -Message 'The Android APK build failed.'
   if (-not (Test-Path -LiteralPath $sourceApk)) {

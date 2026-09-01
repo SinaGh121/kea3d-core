@@ -14,10 +14,10 @@ Then open the local URL shown by Vite and drop a supported model. Current import
 - Mesh and scene: GLB/glTF, STL, 3MF, OBJ/MTL, PLY, FBX, and COLLADA/DAE.
 - CAD: STEP/STP, IGES/IGS, and BREP.
 - Compatibility conversion: BLEND through a lazy local Assimp worker. New or feature-heavy Blender files may still need export to GLB.
-- Project foundation: validated `.kea3d` Project v1 manifests with one root GLB selected alongside the manifest.
+- Assembly projects: validated `.kea3d` Project v1 manifests with reusable GLB instances and fixed anchor-to-anchor attachments.
 
 Select companion material, binary, and texture files together with the main model when the format references external files.
-For the current project slice, select the `.kea3d` manifest and its referenced root GLB together; missing files are reported without replacing the model already open.
+Select the `.kea3d` manifest and all referenced GLBs together. Kea3D validates the graph and anchor metadata before replacing the open model; missing files or anchors produce actionable errors.
 
 After selecting a scene object, **Set material** provides 39 internally authored numerical PBR presets across basics, metals, plastics/rubber, glass, and emissive LEDs. Applicable families expose independent Dark/Standard/Light tone and Matte/Satin/Gloss or Brushed/Satin/Polished finish controls, with advanced numerical PBR adjustment. Changes can target the selected object or all meshes that shared its original material, support bounded Undo/Redo through the panel or Ctrl/Command shortcuts, and are included only when saving a new corrected GLB copy.
 

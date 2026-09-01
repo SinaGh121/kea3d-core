@@ -197,10 +197,15 @@ export function resolveProjectResourceFile(
   projectFile: File,
   files: readonly File[],
 ): File {
-  if (project.instances.length !== 1) {
-    throw new Error('Kea3D Project v1 currently opens one root GLB instance. Multi-instance assembly loading is the next project milestone.');
-  }
   const resource = rootProjectResource(project);
+  return resolveResourceFile(resource, projectFile, files);
+}
+
+function resolveResourceFile(
+  resource: Kea3dProjectResource,
+  projectFile: File,
+  files: readonly File[],
+): File {
   const projectPath = normalizedSelectedPath(projectFile);
   const slash = projectPath.lastIndexOf('/');
   const projectDirectory = slash >= 0 ? projectPath.slice(0, slash + 1) : '';
@@ -213,4 +218,15 @@ export function resolveProjectResourceFile(
   if (basenameMatches.length === 1) return basenameMatches[0];
   if (basenameMatches.length > 1) throw new Error(`Project resource "${resource.uri}" is ambiguous. Select the project folder so Kea3D can match its relative path.`);
   throw new Error(`Project resource "${resource.uri}" is missing. Choose the .kea3d project and its referenced GLB together.`);
+}
+
+export function resolveProjectResourceFiles(
+  project: Kea3dProjectDocument,
+  projectFile: File,
+  files: readonly File[],
+): Map<string, File> {
+  const referencedResourceIds = new Set(project.instances.map((instance) => instance.resource));
+  return new Map(project.resources
+    .filter((resource) => referencedResourceIds.has(resource.id))
+    .map((resource) => [resource.id, resolveResourceFile(resource, projectFile, files)]));
 }

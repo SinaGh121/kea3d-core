@@ -5,6 +5,7 @@ import {
   normalizeProjectResourceUri,
   parseKea3dProjectJson,
   resolveProjectResourceFile,
+  resolveProjectResourceFiles,
   rootProjectResource,
   type Kea3dProjectDocument,
 } from './projectFormat';
@@ -94,13 +95,25 @@ describe('Kea3D project format v1', () => {
     expect(() => resolveProjectResourceFile(parsed, manifest, [manifest])).toThrow('Choose the .kea3d project and its referenced GLB together');
   });
 
-  it('keeps multi-instance projects valid but defers their scene loading clearly', () => {
+  it('resolves each referenced resource once for multi-instance projects', () => {
     const parsed = parseKea3dProjectJson(JSON.stringify(project({
+      resources: [
+        { id: 'chassis-model', uri: 'components/chassis.glb' },
+        { id: 'wheel-model', uri: 'components/wheel.glb' },
+      ],
       instances: [
         { id: 'chassis', resource: 'chassis-model' },
-        { id: 'wheel', resource: 'chassis-model', attachment: { sourceAnchor: 'wheel-base', targetInstance: 'chassis', targetAnchor: 'wheel-mount' } },
+        { id: 'wheel-left', resource: 'wheel-model', attachment: { sourceAnchor: 'wheel-base', targetInstance: 'chassis', targetAnchor: 'wheel-left' } },
+        { id: 'wheel-right', resource: 'wheel-model', attachment: { sourceAnchor: 'wheel-base', targetInstance: 'chassis', targetAnchor: 'wheel-right' } },
       ],
     }))) as Kea3dProjectDocument;
-    expect(() => resolveProjectResourceFile(parsed, file('robot.kea3d'), [file('chassis.glb')])).toThrow('Multi-instance assembly loading is the next project milestone');
+    const manifest = file('robot.kea3d');
+    const chassis = file('chassis.glb');
+    const wheel = file('wheel.glb');
+    const resolved = resolveProjectResourceFiles(parsed, manifest, [manifest, chassis, wheel]);
+    expect([...resolved]).toEqual([
+      ['chassis-model', chassis],
+      ['wheel-model', wheel],
+    ]);
   });
 });

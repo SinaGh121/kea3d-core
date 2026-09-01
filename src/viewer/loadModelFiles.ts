@@ -12,7 +12,9 @@ import { createCadCacheKey, readCadCache, writeCadCache } from './cadCache';
 import { createArchiveEntryFilter } from './archiveSafety';
 import { sanitizeCadImportResult } from './cadResult';
 import { consumePreparedModel } from './preparedModel';
-import { decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, resolveProjectResourceFile } from '../project/projectFormat';
+import { decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, resolveProjectResourceFile, resolveProjectResourceFiles } from '../project/projectFormat';
+import { buildFixedAssemblyScene } from '../project/assemblyScene';
+import { disposeObject3D } from './disposeObject';
 
 interface LoadedModelSource {
   scene: Object3D;
@@ -44,17 +46,41 @@ export async function loadModelFiles(
     const projectBuffer = await readFileBuffer(projectFile, onProgress, signal);
     throwIfLoadCancelled(signal);
     const project = decodeKea3dProject(projectBuffer);
-    const resourceFile = resolveProjectResourceFile(project, projectFile, files);
-    const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
-    if (!gltf.scene.name.trim()) gltf.scene.name = project.name;
-    return {
-      scene: gltf.scene,
-      animations: gltf.animations,
-      mainFile: projectFile,
-      totalSize: projectFile.size + resourceFile.size,
-      sourceUnit: 'm',
-      upAxis: 'y',
-    };
+    if (project.instances.length === 1) {
+      const resourceFile = resolveProjectResourceFile(project, projectFile, files);
+      const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
+      if (!gltf.scene.name.trim()) gltf.scene.name = project.name;
+      return {
+        scene: gltf.scene,
+        animations: gltf.animations,
+        mainFile: projectFile,
+        totalSize: projectFile.size + resourceFile.size,
+        sourceUnit: 'm',
+        upAxis: 'y',
+      };
+    }
+
+    const resourceFiles = resolveProjectResourceFiles(project, projectFile, files);
+    const resourceScenes = new Map<string, Object3D>();
+    try {
+      for (const [resourceId, resourceFile] of resourceFiles) {
+        throwIfLoadCancelled(signal);
+        const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
+        resourceScenes.set(resourceId, gltf.scene);
+        if (gltf.animations.length > 0) throw new Error(`Project resource "${resourceId}" contains animation. Animated assembly instances are not supported yet.`);
+      }
+      return {
+        scene: buildFixedAssemblyScene(project, resourceScenes),
+        animations: [],
+        mainFile: projectFile,
+        totalSize: projectFile.size + [...new Set(resourceFiles.values())].reduce((total, file) => total + file.size, 0),
+        sourceUnit: 'm',
+        upAxis: 'y',
+      };
+    } catch (error) {
+      resourceScenes.forEach(disposeObject3D);
+      throw error;
+    }
   }
   const gltfFile = files.find((file) => ['glb', 'gltf'].includes(fileExtension(file.name)));
   if (gltfFile) {
