@@ -1,6 +1,6 @@
 [package]
 name = "kea3d"
-version = "0.1.70"
+version = "0.1.71"
 description = "Fast, private, local-first 3D and CAD viewer"
 authors = ["SinaGh121"]
 license = "MPL-2.0"

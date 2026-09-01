@@ -6,6 +6,7 @@ the features used by the authoring tool.
 | Format | Status | Notes |
 | --- | --- | --- |
 | KEA3D Project v1 | Fixed assemblies | Validated reusable GLB instances, deterministic anchor attachments, secure relative resolution, optional integrity checks, missing/changed-resource recovery, validated Save/Save As, and flattened GLB export. Joints remain planned. |
+| KEA3DP package | Primary project transport | Self-contained, bounded ZIP-compatible transport containing one validated Project v1 manifest and every required GLB. Open, Pack, Save, and Save As are implemented; folder Unpack remains planned. |
 | GLB / glTF | Primary | Scenes, PBR materials, textures, animations, Draco, Meshopt, and KTX2/Basis. Select external `.bin` and texture files with `.gltf`. |
 | STEP / STP | Primary CAD | Worker-based OpenCascade tessellation; assemblies and colors depend on source metadata. |
 | IGES / IGS / BREP | Primary CAD | Worker-based OpenCascade tessellation. |
@@ -28,6 +29,14 @@ folder picker and still supports selecting companions together. Missing or chang
 resources open a non-destructive recovery workspace; invalid anchors are reported
 without replacing the open model. Validated manifest Save/Save As and flattened
 single-file GLB export are implemented. Anchor authoring and joints remain planned.
+
+`.kea3dp` packages reuse the same manifest schema. They reject traversal,
+absolute or colliding paths, directory/symlink/encrypted/nested/unreferenced
+entries, unsupported compression, malformed local/central headers, excessive
+entry sizes/counts, compression ratios, and expanded totals before loading.
+Required GLBs are stored without redundant compression. Desktop package saves
+use a same-directory temporary file and atomic replacement; mobile uses the
+system document provider and web/PWA downloads the package locally.
 
 The authoritative contract and implementation gates are in
 `KEA3D_PROJECT_FORMAT.md`.

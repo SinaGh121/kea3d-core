@@ -11,9 +11,9 @@ The current opening slice resolves all referenced GLBs explicitly selected with
 the manifest, discovers version-one anchor metadata, and evaluates fixed
 multi-instance attachments without mutating source assets. Desktop project-
 relative resolution, explicit web/PWA project-folder selection, optional resource
-integrity checks, recovery, validated Save/Save As, and flattened GLB export are
-implemented. Anchor authoring, joints, and canonical website publication remain
-later gates.
+integrity checks, recovery, validated Save/Save As, bounded `.kea3dp` Open/Pack/
+Save, and flattened GLB export are implemented. Package folder Unpack, anchor
+authoring, joints, and canonical website publication remain later gates.
 
 `ANCHOR_ATTACHMENT_SYSTEM.md` is the detailed authority for Anchor,
 Attachment, and Joint semantics. The core rule is that Anchors define location
@@ -218,12 +218,11 @@ robot.kea3d + components/*
   -> export robot.glb
 ```
 
-## Future packaged project
+## Packaged project transport
 
-Kea3D reserves `.kea3dp` for a later self-contained package containing one
+Kea3D uses `.kea3dp` for a self-contained package containing one
 ordinary `.kea3d` manifest and its required component files. It is a transport
-and sharing container, not a second assembly schema, and is not part of the
-initial version-one implementation.
+and sharing container, not a second assembly schema.
 
 ```text
 robot.kea3dp
@@ -256,11 +255,11 @@ Initial package rules are deliberately strict:
 - atomic package writes where the platform supports them;
 - no mutation of reusable source GLB files.
 
-The planned user operations are `Pack Project`, `Unpack Project`, and normal
-Open/Save support for an already packaged document. `Export Flattened GLB`
-remains a separate interoperability operation. Streaming behavior, licensing
-review, missing-resource policy, and deterministic pack/unpack and malformed-
-archive tests are release gates.
+Implemented operations are `Pack Project`, Open, Save, and Save As for an
+already packaged document. `Export Flattened GLB` remains a separate
+interoperability operation. Explicit folder Unpack is deferred until the native
+mobile document-tree destination contract exists; Kea3D does not substitute
+lossy multi-download behavior.
 
 ## Implementation sequence
 
@@ -272,7 +271,9 @@ archive tests are release gates.
 6. Add transactional save, Save As, and migration fixtures. **Complete for validated version-one manifests and atomic desktop replacement.**
 7. Add flattened GLB export and reopen validation. **Complete.**
 8. Add bounded `.kea3dp` pack/unpack only after transparent external projects
-   and their Save/Save As recovery behavior are proven.
+   and their Save/Save As recovery behavior are proven. **Open, deterministic
+   Pack, Save, and atomic desktop Save are complete; explicit folder Unpack
+   remains.**
 
 All changes after schema v1 ships require explicit migration behavior and
 backward-compatibility fixtures.

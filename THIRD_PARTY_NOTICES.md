@@ -6,6 +6,7 @@ Kea3D is licensed under MPL-2.0. Its dependency versions are pinned in
 ## Import and rendering runtimes
 
 - Three.js — MIT — <https://github.com/mrdoob/three.js>
+- fflate — MIT — <https://github.com/101arrowz/fflate>
 - occt-import-js — LGPL-2.1 — <https://github.com/kovacsv/occt-import-js>
 - Open CASCADE Technology, used by occt-import-js — LGPL-2.1 with the OCCT
   exception — <https://dev.opencascade.org/resources/licensing>
@@ -18,7 +19,8 @@ The OpenCascade and Assimp WebAssembly modules are shipped as separate,
 replaceable files. Unmodified upstream source is available from the links
 above at the versions recorded in `package-lock.json`. Distribution packages
 must include `public/licenses/occt-import-js-LGPL-2.1.txt` and
-`public/licenses/assimpjs-MIT.txt`.
+`public/licenses/assimpjs-MIT.txt`. Packages with `.kea3dp` support must include
+`public/licenses/fflate-MIT.txt`.
 Windows packages that include the thumbnail provider must also include
 `public/licenses/cgltf-MIT.txt`.
 

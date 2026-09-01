@@ -65,6 +65,7 @@ export interface Kea3dProjectSession {
   document: Kea3dProjectDocument;
   manifestFile: File;
   resourceFiles: ReadonlyMap<string, File>;
+  packageFile?: File;
 }
 
 function fail(message: string): never {

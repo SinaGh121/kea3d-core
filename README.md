@@ -14,10 +14,10 @@ Then open the local URL shown by Vite and drop a supported model. Current import
 - Mesh and scene: GLB/glTF, STL, 3MF, OBJ/MTL, PLY, FBX, and COLLADA/DAE.
 - CAD: STEP/STP, IGES/IGS, and BREP.
 - Compatibility conversion: BLEND through a lazy local Assimp worker. New or feature-heavy Blender files may still need export to GLB.
-- Assembly projects: validated `.kea3d` Project v1 manifests with reusable GLB instances and fixed anchor-to-anchor attachments.
+- Assembly projects: validated `.kea3d` Project v1 manifests and self-contained `.kea3dp` packages with reusable GLB instances and fixed anchor-to-anchor attachments.
 
 Select companion material, binary, and texture files together with the main model when the format references external files.
-On the web/PWA, use **Open project folder** or select the `.kea3d` manifest and all referenced GLBs together. Desktop apps and file associations securely resolve referenced GLBs relative to the manifest automatically. Kea3D validates the graph, optional resource integrity metadata, and anchors before replacing the open model. Its recovery workspace can locate or replace missing resources, explicitly accept changed files, or remove unavailable non-root component subtrees. The Export workspace saves validated project manifests and creates standard flattened GLBs with resolved assembly transforms.
+On the web/PWA, use **Open project folder**, select the `.kea3d` manifest and referenced GLBs together, or open one self-contained `.kea3dp`. Desktop apps and file associations securely resolve referenced GLBs relative to transparent manifests automatically. Kea3D validates the graph, optional resource integrity metadata, anchors, and packaged ZIP boundary before replacing the open model. Its Export workspace saves manifests, packs or atomically resaves `.kea3dp` transports, and creates standard flattened GLBs with resolved assembly transforms.
 
 After selecting a scene object, **Set material** provides 39 internally authored numerical PBR presets across basics, metals, plastics/rubber, glass, and emissive LEDs. Applicable families expose independent Dark/Standard/Light tone and Matte/Satin/Gloss or Brushed/Satin/Polished finish controls, with advanced numerical PBR adjustment. Changes can target the selected object or all meshes that shared its original material, support bounded Undo/Redo through the panel or Ctrl/Command shortcuts, and are included only when saving a new corrected GLB copy.
 

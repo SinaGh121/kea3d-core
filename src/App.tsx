@@ -32,7 +32,7 @@ import { isNativeShell } from '@/nativeShell';
 import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
 import type { Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
 
-const acceptedExtensions = ['.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
+const acceptedExtensions = ['.kea3dp', '.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
 const productWebsite = 'https://kea3d.com';
 const coreSourceRelease = `https://github.com/SinaGh121/kea3d-core/releases/tag/v${packageMetadata.version}`;
 const legalDocuments = {
@@ -657,7 +657,6 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [projectRecovery, setProjectRecovery] = useState<ProjectResourceRecoveryState | null>(null);
   const [projectSession, setProjectSession] = useState<Kea3dProjectSession | null>(null);
-  const [savingProject, setSavingProject] = useState(false);
   const [infoVisible, setInfoVisible] = useState(initialSettings.panels.modelInfoVisible);
   const [gridVisible, setGridVisible] = useState(initialSettings.viewer.gridVisible);
   const [displayMode, setDisplayMode] = useState<DisplayMode>(initialSettings.viewer.displayMode);
@@ -938,7 +937,7 @@ export default function App() {
     setProjectRecovery(null);
     const controller = new AbortController();
     loadAbortRef.current = controller;
-    setLoadingName(files.find((file) => /\.(kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model');
+    setLoadingName(files.find((file) => /\.(kea3dp|kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model');
     setLoadingBytes(files.reduce((total, file) => total + file.size, 0));
     setProgress({ stage: 'preparing', value: 0.05 });
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -1049,7 +1048,7 @@ export default function App() {
           const { Channel, invoke } = await import('@tauri-apps/api/core');
           const pending = await invoke<NativeOpenFile[]>('take_pending_open_files');
           if (pending.length === 0) return;
-          setLoadingName(pending.find((entry) => /\.(kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(entry.name))?.name ?? 'Local model');
+          setLoadingName(pending.find((entry) => /\.(kea3dp|kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(entry.name))?.name ?? 'Local model');
           setLoadingBytes(pending.reduce((total, entry) => total + entry.size, 0));
           setProgress({ stage: 'reading' });
           setReadingNativeFile(true);
@@ -1244,7 +1243,7 @@ export default function App() {
         directory: false,
         filters: [{
           name: '3D models',
-          extensions: ['kea3d', 'glb', 'gltf', 'stl', '3mf', 'obj', 'mtl', 'ply', 'fbx', 'dae', 'step', 'stp', 'iges', 'igs', 'brep', 'blend', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'ktx2'],
+          extensions: ['kea3dp', 'kea3d', 'glb', 'gltf', 'stl', '3mf', 'obj', 'mtl', 'ply', 'fbx', 'dae', 'step', 'stp', 'iges', 'igs', 'brep', 'blend', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'ktx2'],
         }],
       });
       if (!selected) return;
@@ -1741,28 +1740,6 @@ export default function App() {
       setExporting(false);
     }
   };
-  const saveProject = async (saveAs: boolean) => {
-    if (!projectSession) return;
-    setSavingProject(true);
-    try {
-      const { saveProjectSession } = await import('@/project/projectSave');
-      const result = await saveProjectSession({
-        session: projectSession,
-        fileName: modelInfo?.fileName ?? projectSession.manifestFile.name,
-        nativeShell,
-        desktopNativeShell,
-        saveAs,
-      });
-      if (!result.cancelled) {
-        setProjectSession(result.session);
-        toast.success(result.message);
-      }
-    } catch (saveError) {
-      showError(saveError instanceof Error ? saveError.message : 'The project could not be saved.');
-    } finally {
-      setSavingProject(false);
-    }
-  };
   const saveScreenshot = async () => {
     if (!viewerRef.current || !modelInfo) return;
     try {
@@ -2140,7 +2117,7 @@ export default function App() {
               <p className="mt-1.5 mb-5 text-sm text-muted-foreground">{initialSharedView ? 'Shared view ready · choose the same local model' : compactLayout ? 'Choose files from your device' : 'Drop files here or choose them from your device'}</p>
               <Button size="lg" className="rounded-xl" onClick={() => void chooseModelFiles()}><FolderOpen /> Choose files</Button>
               {!nativeShell && <Button variant="ghost" size="sm" className="mt-1.5" onClick={chooseProjectFolder}><Boxes /> Open project folder</Button>}
-              <small className="mt-4 max-w-sm text-[11px] leading-relaxed text-muted-foreground">KEA3D · STEP · IGES · GLB · STL · 3MF · OBJ · PLY · FBX · DAE · BLEND</small>
+              <small className="mt-4 max-w-sm text-[11px] leading-relaxed text-muted-foreground">KEA3DP · KEA3D · STEP · IGES · GLB · STL · 3MF · OBJ · PLY · FBX · DAE · BLEND</small>
               <small className="mt-1 text-[11px] text-muted-foreground">Processed locally · Nothing is uploaded</small>
             </section>
           )}
@@ -2743,9 +2720,12 @@ export default function App() {
               {projectSession && (
                 <Suspense fallback={null}>
                   <ProjectSaveControls
-                    saving={savingProject}
-                    onSave={() => void saveProject(false)}
-                    onSaveAs={() => void saveProject(true)}
+                    session={projectSession}
+                    fileName={modelInfo.fileName}
+                    nativeShell={nativeShell}
+                    desktopNativeShell={desktopNativeShell}
+                    onSessionChange={setProjectSession}
+                    onError={showError}
                   />
                 </Suspense>
               )}

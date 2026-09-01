@@ -76,7 +76,25 @@ export async function loadModelFiles(
       mainFile: prepared.file,
     };
   }
+  const packageFiles = files.filter((file) => fileExtension(file.name) === 'kea3dp');
   const projectFiles = files.filter((file) => fileExtension(file.name) === 'kea3d');
+  if (packageFiles.length > 1) throw new Error('Choose one .kea3dp packaged project at a time.');
+  if (packageFiles.length > 0 && projectFiles.length > 0) throw new Error('Choose either a .kea3dp package or a .kea3d project folder.');
+  const packageFile = packageFiles[0];
+  if (packageFile) {
+    const packageBuffer = await readFileBuffer(packageFile, onProgress, signal);
+    throwIfLoadCancelled(signal);
+    const { decodeKea3dPackage } = await import('../project/projectPackage');
+    const packaged = decodeKea3dPackage(packageBuffer);
+    const loaded = await loadModelFiles(packaged.files, onProgress, renderer, signal);
+    if (!loaded.project) throw new Error('Invalid Kea3D package: the project manifest could not be opened.');
+    return {
+      ...loaded,
+      mainFile: packageFile,
+      totalSize: packageFile.size,
+      project: { ...loaded.project, packageFile },
+    };
+  }
   if (projectFiles.length > 1) throw new Error('Choose one .kea3d project at a time.');
   const projectFile = projectFiles[0];
   if (projectFile) {

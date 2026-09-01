@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Kea3D",
-  "version": "0.1.70",
+  "version": "0.1.71",
   "identifier": "app.kea3d.viewer.v2",
   "build": {
     "frontendDist": "../dist",
@@ -49,7 +49,9 @@
           "iges",
           "igs",
           "brep",
-          "blend"
+          "blend",
+          "kea3d",
+          "kea3dp"
         ],
         "name": "Kea3D model",
         "description": "3D model opened with Kea3D",

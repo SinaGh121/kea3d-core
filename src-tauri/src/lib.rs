@@ -31,11 +31,12 @@ const EMBEDDED_CAD_WORKER: &[u8] =
 
 const SUPPORTED_MODEL_EXTENSIONS: &[&str] = &[
     "glb", "gltf", "stl", "3mf", "obj", "ply", "fbx", "dae", "step", "stp", "iges", "igs", "brep",
-    "blend", "kea3d",
+    "blend", "kea3d", "kea3dp",
 ];
 const PICKER_RESOURCE_EXTENSIONS: &[&str] =
     &["mtl", "bin", "png", "jpg", "jpeg", "webp", "avif", "ktx2"];
 const NATIVE_OPEN_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PROJECT_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 const THUMBNAIL_PROVIDER_CLSID: &str = "{E50D62FC-E508-4A2D-82AF-A3290688D78C}";
 const LEGACY_THUMBNAIL_PROVIDER_CLSIDS: &[&str] = &[
     "{7142101B-D67D-4B30-BBD6-4BB965CCA2AF}",
@@ -753,6 +754,57 @@ async fn save_project_file_atomic(path: String, contents: Vec<u8>) -> Result<(),
         .map_err(|error| format!("The project save task could not finish: {error}"))?
 }
 
+fn commit_project_package(temporary: &Path, destination: &Path) -> Result<(), String> {
+    if !destination
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("kea3dp"))
+    {
+        return Err("Packaged Kea3D projects must use the .kea3dp extension.".to_owned());
+    }
+    let destination_parent = destination
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| "The package destination folder does not exist.".to_owned())?;
+    if temporary.parent() != Some(destination_parent) {
+        return Err("The temporary package must be in the destination folder.".to_owned());
+    }
+    let destination_name = destination.file_name().and_then(OsStr::to_str).ok_or_else(|| "The package destination is invalid.".to_owned())?;
+    let temporary_name = temporary.file_name().and_then(OsStr::to_str).unwrap_or_default();
+    if !temporary_name.starts_with(&format!(".{destination_name}.")) || !temporary_name.ends_with(".tmp") {
+        return Err("The temporary package name is invalid.".to_owned());
+    }
+    let metadata = std::fs::symlink_metadata(temporary).map_err(|error| format!("The temporary package is unavailable: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > MAX_PROJECT_PACKAGE_BYTES {
+        let _ = std::fs::remove_file(temporary);
+        return Err("The temporary package has an invalid size or type.".to_owned());
+    }
+    if destination.exists() && std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?.file_type().is_symlink() {
+        let _ = std::fs::remove_file(temporary);
+        return Err("A packaged project cannot replace a symbolic link.".to_owned());
+    }
+    let sync_result = std::fs::OpenOptions::new().read(true).write(true).open(temporary).and_then(|file| file.sync_all());
+    if let Err(error) = sync_result {
+        let _ = std::fs::remove_file(temporary);
+        return Err(format!("Could not finish writing the packaged project: {error}"));
+    }
+    let result = if destination.exists() { replace_project_file(temporary, destination) } else { std::fs::rename(temporary, destination) };
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(temporary);
+        return Err(format!("Could not replace the packaged project: {error}"));
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
+async fn commit_project_package_file(temporary_path: String, destination_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commit_project_package(Path::new(&temporary_path), Path::new(&destination_path))
+    })
+    .await
+    .map_err(|error| format!("The packaged project save task could not finish: {error}"))?
+}
+
 #[cfg(target_os = "windows")]
 fn native_cad_worker_path() -> Result<PathBuf, String> {
     use std::fs;
@@ -1177,6 +1229,7 @@ pub fn run() {
             read_pending_open_file_chunk,
             finish_pending_open_file,
             save_project_file_atomic,
+            commit_project_package_file,
             get_thumbnail_provider_status,
             set_thumbnail_provider_enabled
         ])
@@ -1221,6 +1274,27 @@ mod tests {
         assert!(std::fs::read_dir(&root).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
         assert!(write_project_file_atomic(&root.join("project.json"), first).is_err());
         assert!(write_project_file_atomic(&destination, b"not json").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn atomically_commits_bounded_packaged_projects() {
+        let root = std::env::temp_dir().join(format!("kea3d-package-save-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("assembly.kea3dp");
+        let first_temporary = root.join(".assembly.kea3dp.first.tmp");
+        std::fs::write(&first_temporary, b"first package").unwrap();
+        commit_project_package(&first_temporary, &destination).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"first package");
+        let second_temporary = root.join(".assembly.kea3dp.second.tmp");
+        std::fs::write(&second_temporary, b"second package").unwrap();
+        commit_project_package(&second_temporary, &destination).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"second package");
+        let wrong_name = root.join("unrelated.tmp");
+        std::fs::write(&wrong_name, b"package").unwrap();
+        assert!(commit_project_package(&wrong_name, &destination).is_err());
+        assert!(commit_project_package(&wrong_name, &root.join("assembly.zip")).is_err());
+        std::fs::remove_file(wrong_name).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 

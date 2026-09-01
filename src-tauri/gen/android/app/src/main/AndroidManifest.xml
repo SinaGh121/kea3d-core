@@ -162,6 +162,8 @@
                 <data android:pathPattern=".*\\.igs" />
                 <data android:pathPattern=".*\\.brep" />
                 <data android:pathPattern=".*\\.blend" />
+                <data android:pathPattern=".*\\.kea3d" />
+                <data android:pathPattern=".*\\.kea3dp" />
             </intent-filter>
 
             <!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->
