@@ -1,5 +1,6 @@
 import { Mesh, type Object3D } from 'three';
 import type { SceneNode } from './types';
+import { isAnchorObject } from '@/project/componentAnchors';
 
 export function buildSceneTree(root: Object3D, objects: Map<string, Object3D>): SceneNode[] {
   let meshIndex = 0;
@@ -10,7 +11,8 @@ export function buildSceneTree(root: Object3D, objects: Map<string, Object3D>): 
       .map((child) => visit(child))
       .filter((child): child is SceneNode => child !== null);
     const isMesh = object instanceof Mesh;
-    if (!isRoot && !isMesh && children.length === 0) return null;
+    const isAnchor = isAnchorObject(object);
+    if (!isRoot && !isMesh && !isAnchor && children.length === 0) return null;
 
     objects.set(object.uuid, object);
     if (isMesh) meshIndex += 1;
@@ -19,7 +21,7 @@ export function buildSceneTree(root: Object3D, objects: Map<string, Object3D>): 
     return {
       id: object.uuid,
       name: object.name.trim() || (isMesh ? `Part ${meshIndex}` : isRoot ? 'Model' : `Group ${groupIndex}`),
-      type: isMesh ? 'mesh' : 'group',
+      type: isMesh ? 'mesh' : isAnchor ? 'anchor' : 'group',
       visible: object.visible,
       children,
     };

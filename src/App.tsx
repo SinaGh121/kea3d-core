@@ -54,6 +54,7 @@ type ProjectResourceRecoveryState = { files: File[]; issues: ProjectResourceReco
 const windowsThumbnailPreferenceKey = 'kea3d.windows-thumbnails.preference.v1';
 const ProjectRecoveryPanel = lazy(() => import('@/project/ProjectRecoveryPanel'));
 const ProjectSaveControls = lazy(() => import('@/project/ProjectSaveControls'));
+const AnchorInspector = lazy(() => import('@/project/AnchorInspector'));
 
 function windowsThumbnailPreference(): 'enabled' | 'disabled' | null {
   try {
@@ -165,15 +166,15 @@ const keyboardShortcuts = [
   ['Ctrl / ⌘ Z', 'Undo last change'],
   ['Ctrl / ⌘ Shift Z', 'Redo last change'],
   ['Ctrl / ⌘ Space', 'View selector'],
-  ['Ctrl / ⌘ Click', 'Add / remove selection'],
+  ['Ctrl / ⌘ Click', 'Toggle selection'],
   ['Shift Click', 'Select scene-tree range'],
   ['Esc', 'Clear selection'],
   ['F', 'Fit model'],
   ['I', 'Isolate / show all'],
   ['M', 'Material presets'],
-  ['P', 'Perspective / orthographic'],
-  ['G', 'Show / hide grid'],
-  ['E', 'Cycle display mode'],
+  ['P', 'Toggle projection'],
+  ['G', 'Grid'],
+  ['E', 'Display mode'],
 ] as const;
 
 const emptyMaterialEditState: MaterialEditState = {
@@ -599,7 +600,9 @@ function SceneTreeItem({ depth, node, onSelect, onVisibility, selectedIds, prima
         >
           {node.type === 'mesh'
             ? <Box className={cn('size-3.5 shrink-0 text-muted-foreground', selected && 'text-primary')} />
-            : <Boxes className={cn('size-3.5 shrink-0 text-muted-foreground', selected && 'text-primary')} />}
+            : node.type === 'anchor'
+              ? <Move3D className={cn('size-3.5 shrink-0 text-muted-foreground', selected && 'text-primary')} />
+              : <Boxes className={cn('size-3.5 shrink-0 text-muted-foreground', selected && 'text-primary')} />}
           <span title={node.name} className={cn('block min-w-0 flex-1 truncate', !node.visible && 'text-muted-foreground line-through')}>{node.name}</span>
         </button>
         <Button
@@ -661,6 +664,8 @@ export default function App() {
   const [gridVisible, setGridVisible] = useState(initialSettings.viewer.gridVisible);
   const [displayMode, setDisplayMode] = useState<DisplayMode>(initialSettings.viewer.displayMode);
   const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
+  const [anchorCount, setAnchorCount] = useState(0);
+  const [anchorsVisible, setAnchorsVisible] = useState(true);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedIdsRef = useRef<string[]>([]);
   const selectionAnchorRef = useRef<string | null>(null);
@@ -970,6 +975,7 @@ export default function App() {
       setModelInfo(loaded.info);
       setProjectSession(loaded.project ?? null);
       setSceneTree(loaded.sceneTree);
+      setAnchorCount(loaded.anchors.length);
       setSelectedIds([]);
       selectedIdsRef.current = [];
       selectionAnchorRef.current = null;
@@ -1547,6 +1553,10 @@ export default function App() {
     viewerRef.current?.setObjectVisible(objectId, visible);
     setSceneTree((nodes) => updateNodeVisibility(nodes, objectId, visible));
   };
+  const toggleAnchorsVisible = (visible: boolean) => {
+    setAnchorsVisible(visible);
+    viewerRef.current?.setAnchorsVisible(visible);
+  };
   const toggleSelectionIsolation = useCallback(() => {
     const result = viewerRef.current?.toggleSelectionIsolation();
     if (!result) return;
@@ -1878,9 +1888,11 @@ export default function App() {
   const selectedName = selectedIds.length > 1
     ? `${selectedIds.length} objects`
     : findNodeName(sceneTree, selectedId);
+  const primaryAnchor = selectionInfo?.anchors?.at(-1) ?? null;
   const isolateSelectionLabel = isolationActive
     ? 'Show all objects'
     : selectedIds.length > 1 ? 'Isolate selected objects' : 'Isolate selected object';
+  const canIsolateSelection = (selectionInfo?.meshes ?? 0) > 0;
   const selectedMaterialPreset = materialPresetId ? findMaterialPreset(materialPresetId) ?? null : null;
   const calibrationAxisIndex = calibrationAxis === 'x' ? 0 : calibrationAxis === 'y' ? 1 : 2;
   const calibrationReferenceDimensions = selectionInfo?.dimensions ?? modelInfo?.dimensions;
@@ -1889,7 +1901,7 @@ export default function App() {
   const calibrationValid = calibrationMultiplier(calibrationCurrentMeters, calibrationTarget, calibrationUnit) !== null;
   const calibrationCurrentValue = calibrationCurrentMeters / unitToMeters[calibrationUnit];
   const adjustmentScale = calibrationScale;
-  const infoRows = selectionInfo ? [
+  const infoRows: Array<[string, string]> = selectionInfo ? [
     ['Triangles', formatNumber(selectionInfo.triangles)], ['Vertices', formatNumber(selectionInfo.vertices)],
     ['Meshes', formatNumber(selectionInfo.meshes)], ['Materials', formatNumber(selectionInfo.materials)],
     ['Dimensions', formatMetricDimensions(selectionInfo.dimensions, displayUnit)],
@@ -1976,7 +1988,7 @@ export default function App() {
               <ToolButton label="Fit model" icon={<Focus />} onClick={() => viewerRef.current?.fit()} />
               <ToolButton active={viewSelectorVisible} label="View selector" icon={<View />} onClick={toggleViewSelector} />
               <ToolButton active={treeVisible} label="Scene objects" icon={<Layers3 />} onClick={toggleScenePanel} />
-              <ToolButton active={isolationActive} disabled={!selectedId && !isolationActive} label={isolateSelectionLabel} icon={isolationActive ? <Boxes /> : <Scan />} onClick={toggleSelectionIsolation} />
+              <ToolButton active={isolationActive} disabled={!canIsolateSelection && !isolationActive} label={isolateSelectionLabel} icon={isolationActive ? <Boxes /> : <Scan />} onClick={toggleSelectionIsolation} />
               <ToolButton active={displayMode !== 'solid'} label={`Display: ${displayMode[0].toUpperCase()}${displayMode.slice(1)} · click to cycle`} icon={<Network />} onClick={cycleDisplayMode} />
               <ToolButton active={projection === 'orthographic'} label={projection === 'perspective' ? 'Use orthographic view' : 'Use perspective view'} icon={<ScanBox />} onClick={toggleProjection} />
               <ToolButton active={rotationMode === 'free'} label={rotationMode === 'fixed-up' ? 'Rotation: Fixed up · use free orbit' : 'Rotation: Free orbit · lock up vector'} icon={<Orbit />} onClick={toggleRotationMode} />
@@ -2006,7 +2018,7 @@ export default function App() {
               <ToolButton label="Fit model" icon={<Focus />} onClick={() => viewerRef.current?.fit()} />
               <ToolButton active={viewSelectorVisible} label="View selector" icon={<View />} onClick={toggleViewSelector} />
               <ToolButton active={treeVisible} label="Scene objects" icon={<Layers3 />} onClick={toggleScenePanel} />
-              <ToolButton active={isolationActive} disabled={!selectedId && !isolationActive} label={isolateSelectionLabel} icon={isolationActive ? <Boxes /> : <Scan />} onClick={toggleSelectionIsolation} />
+              <ToolButton active={isolationActive} disabled={!canIsolateSelection && !isolationActive} label={isolateSelectionLabel} icon={isolationActive ? <Boxes /> : <Scan />} onClick={toggleSelectionIsolation} />
               <ToolButton active={displayMode !== 'solid'} label={`Display: ${displayMode[0].toUpperCase()}${displayMode.slice(1)} · click to cycle`} icon={<Network />} onClick={cycleDisplayMode} />
               <ToolButton active={projection === 'orthographic'} label={projection === 'perspective' ? 'Use orthographic view' : 'Use perspective view'} icon={<ScanBox />} onClick={toggleProjection} />
               <ToolButton active={rotationMode === 'free'} label={rotationMode === 'fixed-up' ? 'Rotation: Fixed up · use free orbit' : 'Rotation: Free orbit · lock up vector'} icon={<Orbit />} onClick={toggleRotationMode} />
@@ -2043,7 +2055,7 @@ export default function App() {
               <Button variant="ghost" size="icon-lg" className="size-11" aria-label="Fit model" onClick={() => viewerRef.current?.fit()}><Focus /></Button>
               <Button variant={viewSelectorVisible ? 'default' : 'ghost'} size="icon-lg" className="size-11" aria-label="View selector" aria-pressed={viewSelectorVisible} onClick={toggleViewSelector}><View /></Button>
               <Button variant={treeVisible ? 'default' : 'ghost'} size="icon-lg" className="size-11" aria-label="Scene objects" aria-pressed={treeVisible} onClick={toggleScenePanel}><Layers3 /></Button>
-              <Button variant={isolationActive ? 'default' : 'ghost'} size="icon-lg" className="size-11" aria-label={isolateSelectionLabel} aria-pressed={isolationActive} disabled={!selectedId && !isolationActive} onClick={toggleSelectionIsolation}>{isolationActive ? <Boxes /> : <Scan />}</Button>
+              <Button variant={isolationActive ? 'default' : 'ghost'} size="icon-lg" className="size-11" aria-label={isolateSelectionLabel} aria-pressed={isolationActive} disabled={!canIsolateSelection && !isolationActive} onClick={toggleSelectionIsolation}>{isolationActive ? <Boxes /> : <Scan />}</Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant={displayMode !== 'solid' || gridVisible ? 'default' : 'ghost'} size="icon-lg" className="size-11" aria-label="Display options"><Network /></Button>
@@ -2509,22 +2521,14 @@ export default function App() {
             </ResponsivePanel>
           )}
 
-          {modelInfo && infoVisible && (
+          {modelInfo && infoVisible && !primaryAnchor && (
             <ResponsivePanel
               title={selectionInfo ? 'Selected info' : 'Model info'}
               description={selectionInfo && selectedName ? selectedName : undefined}
               onClose={() => setInfoVisible(false)}
               desktopClassName="absolute bottom-5 left-5 z-20 w-[310px] gap-2 bg-card/90 shadow-2xl backdrop-blur-md"
-              contentClassName="grid gap-1"
-              titleClassName="text-base"
             >
-              <dl className="grid gap-1">
-                {infoRows.map(([label, value]) => (
-                  <div key={label} className="grid grid-cols-[94px_minmax(0,1fr)] gap-3 text-xs leading-5">
-                    <dt className="text-muted-foreground">{label}</dt><dd className="m-0 [overflow-wrap:anywhere] text-right font-semibold tabular-nums">{value}</dd>
-                  </div>
-                ))}
-              </dl>
+              <Suspense fallback={null}><AnchorInspector mode="rows" rows={infoRows} /></Suspense>
             </ResponsivePanel>
           )}
 
@@ -2553,16 +2557,33 @@ export default function App() {
                         </div>
                         <Button variant="outline" size="sm" className="shrink-0" onClick={() => viewerRef.current?.fitSelection()}><Focus /> Fit</Button>
                       </div>
-                      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-4">
-                        <div><dt className="text-muted-foreground">Meshes</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.meshes)}</dd></div>
-                        <div><dt className="text-muted-foreground">Materials</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.materials)}</dd></div>
-                        <div><dt className="text-muted-foreground">Triangles</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.triangles)}</dd></div>
-                        <div><dt className="text-muted-foreground">Vertices</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.vertices)}</dd></div>
-                        <div className="col-span-2"><dt className="text-muted-foreground">Dimensions</dt><dd className="font-semibold tabular-nums">{formatMetricDimensions(selectionInfo.dimensions, displayUnit)}</dd></div>
-                      </dl>
+                      {primaryAnchor && selectionInfo.meshes === 0 ? (
+                        <Suspense fallback={null}>
+                          <AnchorInspector
+                            mode="selection"
+                            id={primaryAnchor.id}
+                            parent={primaryAnchor.parentName ?? 'Model root'}
+                            position={formatMetricDimensions(primaryAnchor.position, displayUnit)}
+                            rotation={primaryAnchor.rotation.map((value) => formatDimension(value)).join(', ')}
+                          />
+                        </Suspense>
+                      ) : (
+                        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-4">
+                          <div><dt className="text-muted-foreground">Meshes</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.meshes)}</dd></div>
+                          <div><dt className="text-muted-foreground">Materials</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.materials)}</dd></div>
+                          <div><dt className="text-muted-foreground">Triangles</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.triangles)}</dd></div>
+                          <div><dt className="text-muted-foreground">Vertices</dt><dd className="font-semibold tabular-nums">{formatNumber(selectionInfo.vertices)}</dd></div>
+                          <div className="col-span-2"><dt className="text-muted-foreground">Dimensions</dt><dd className="font-semibold tabular-nums">{formatMetricDimensions(selectionInfo.dimensions, displayUnit)}</dd></div>
+                        </dl>
+                      )}
                     </section>
                     <Separator />
                   </>
+                )}
+                {anchorCount > 0 && (
+                  <Suspense fallback={null}>
+                    <AnchorInspector mode="visibility" count={anchorCount} visible={anchorsVisible} onVisibleChange={toggleAnchorsVisible} />
+                  </Suspense>
                 )}
                 <div className="grid gap-1">
                   <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">Exploded view</span><span className="tabular-nums">{Math.round(explodeFactor * 100)}%</span></div>

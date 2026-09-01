@@ -1,0 +1,16 @@
+# Browser test assets
+
+## AnimatedMorphCube.glb
+
+- Source: [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/AnimatedMorphCube)
+- Copyright: 2017 Public
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/legalcode)
+- Purpose: deterministic browser tests for Kea3D animation controls and responsive workspaces
+
+## animated.kea3d
+
+- Source: Kea3D test manifest referencing `AnimatedMorphCube.glb`
+- License: same CC0 fixture scope as the referenced model
+- Purpose: deterministic project-folder selection and relative-resource resolution tests
+
+The fixtures are intentionally small and contain no user data.

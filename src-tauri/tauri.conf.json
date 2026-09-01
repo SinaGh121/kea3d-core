@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Kea3D",
-  "version": "0.1.71",
+  "version": "0.1.72",
   "identifier": "app.kea3d.viewer.v2",
   "build": {
     "frontendDist": "../dist",

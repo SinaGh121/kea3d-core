@@ -36,12 +36,22 @@ export interface SelectionInfo {
   triangles: number;
   materials: number;
   dimensions: [number, number, number];
+  anchors?: AnchorInfo[];
+}
+
+export interface AnchorInfo {
+  objectId: string;
+  id: string;
+  name: string;
+  parentName: string | null;
+  position: [number, number, number];
+  rotation: [number, number, number, number];
 }
 
 export interface SceneNode {
   id: string;
   name: string;
-  type: 'group' | 'mesh';
+  type: 'group' | 'mesh' | 'anchor';
   visible: boolean;
   children: SceneNode[];
 }
@@ -68,6 +78,7 @@ export interface LoadedModel {
   initialSourceUnit: LinearUnit;
   initialUpAxis: UpAxis;
   initialForwardAxis: ForwardAxis;
+  anchors: AnchorInfo[];
   project?: Kea3dProjectSession;
 }
 

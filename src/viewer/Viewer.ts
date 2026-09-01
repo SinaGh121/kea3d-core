@@ -1,5 +1,6 @@
 import {
   AnimationMixer,
+  AxesHelper,
   BackSide,
   Box3,
   BufferGeometry,
@@ -55,7 +56,8 @@ import { throwIfLoadCancelled } from './loadControl';
 import { validateImportedScene } from './validateImportedScene';
 import { defaultMaterialPresetOptions, findMaterialPreset, type MaterialPreset, type MaterialPresetOptions } from './materialPresets';
 import { CommandHistory, type ReversibleCommand } from '../commandHistory';
-import type { AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RotationMode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
+import { discoverComponentAnchorDetails, type ComponentAnchor } from '@/project/componentAnchors';
+import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RotationMode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
 
 const viewDirections: Record<CameraView, Vector3> = {
   // Canonical Kea3D preview direction. Keep the native thumbnail-provider basis
@@ -155,6 +157,7 @@ export class Viewer {
   private readonly selectionOutlineResolution = new Vector2(1, 1);
   private readonly modelRoot = new Group();
   private readonly measurementGroup = new Group();
+  private readonly anchorGroup = new Group();
   private readonly grid = new GridHelper(10, 10, 0x59606a, 0x30343a);
   private readonly resizeObserver: ResizeObserver;
   private environmentScene: RoomEnvironment | null = null;
@@ -191,6 +194,10 @@ export class Viewer {
   private readonly commandHistory = new CommandHistory(commandHistoryLimit);
   private materialPreview: MaterialChange | null = null;
   private selectedObjects: Object3D[] = [];
+  private currentAnchors: ComponentAnchor[] = [];
+  private readonly anchorByObjectId = new Map<string, ComponentAnchor>();
+  private readonly anchorMarkers = new Map<Object3D, Group>();
+  private anchorsVisible = true;
   private readonly selectionOverlays = new Map<Mesh, {
     group: Group;
     fillMaterial: MeshBasicMaterial;
@@ -249,7 +256,7 @@ export class Viewer {
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
     this.renderer.domElement.addEventListener('pointercancel', this.handlePointerCancel);
 
-    this.scene.add(this.modelRoot, this.grid, this.measurementGroup, this.viewSelector.group);
+    this.scene.add(this.modelRoot, this.grid, this.measurementGroup, this.anchorGroup, this.viewSelector.group);
     this.grid.visible = false;
     const gridMaterials = Array.isArray(this.grid.material) ? this.grid.material : [this.grid.material];
     gridMaterials.forEach((material) => {
@@ -319,6 +326,10 @@ export class Viewer {
     }
     onProgress({ stage: 'preparing' });
 
+    // A resolved assembly may contain reusable instances of one component, so
+    // the same resource-local Anchor ID can legitimately appear more than once.
+    const anchors = discoverComponentAnchorDetails(scene, mainFile.name, { allowDuplicateIds: true });
+
     this.clearModel();
     this.currentModel = scene;
     this.currentAnimations = animations;
@@ -333,6 +344,7 @@ export class Viewer {
     this.prepareAnimations();
     this.modelRoot.add(scene);
     const sceneTree = buildSceneTree(scene, this.objectById);
+    this.prepareAnchors(anchors);
     this.prepareInspectionTools();
     this.applyLighting();
     this.orientationGizmo.setVisible(true);
@@ -355,8 +367,15 @@ export class Viewer {
       initialSourceUnit: sourceUnit,
       initialUpAxis: upAxis,
       initialForwardAxis: this.initialForwardAxis,
+      anchors: this.currentAnchors.map((anchor) => this.anchorInfo(anchor)),
       project: loaded.project,
     };
+  }
+
+  setAnchorsVisible(visible: boolean): void {
+    this.anchorsVisible = visible;
+    this.anchorGroup.visible = visible && this.currentAnchors.length > 0;
+    this.invalidate();
   }
 
   fit(view?: CameraView): void {
@@ -816,7 +835,7 @@ export class Viewer {
       return { active: false, visibility: this.getTreeVisibility() };
     }
 
-    if (!this.currentModel || this.selectedObjects.length === 0) return null;
+    if (!this.currentModel || this.getSelectedMeshes().length === 0) return null;
     const visibility = new Map<Object3D, boolean>();
     this.currentModel.traverse((object) => visibility.set(object, object.visible));
     this.isolationVisibility = visibility;
@@ -947,6 +966,10 @@ export class Viewer {
       fillMaterial.color.copy(this.accentColor);
       outlineMaterial?.uniforms.outlineColor.value.copy(this.accentColor);
     });
+    this.anchorMarkers.forEach((marker) => {
+      const origin = marker.children.find((child) => child instanceof Mesh) as Mesh | undefined;
+      if (origin?.material instanceof MeshBasicMaterial) origin.material.color.copy(this.accentColor);
+    });
     this.invalidate();
   }
 
@@ -994,6 +1017,7 @@ export class Viewer {
     const viewSelectorAnimating = this.viewSelector.update(timestamp);
     this.controls.update();
     this.updateMeasurementMarkerScales();
+    this.updateAnchorMarkers();
     this.updateSelectionOverlays();
     this.renderer.render(this.scene, this.camera);
     this.orientationGizmo.render(this.camera, this.controls.target);
@@ -1058,6 +1082,7 @@ export class Viewer {
     this.clearAnimations();
     this.clearEdgeHelpers();
     this.clearMaterialEdits();
+    this.clearAnchors();
     this.clearInspectionTools();
     this.modelRoot.remove(this.currentModel);
     disposeObject3D(this.currentModel);
@@ -1205,6 +1230,92 @@ export class Viewer {
     this.notifyAnimationChange();
   }
 
+  private prepareAnchors(anchors: ComponentAnchor[]): void {
+    this.currentAnchors = anchors;
+    this.anchorByObjectId.clear();
+    anchors.forEach((anchor) => {
+      this.anchorByObjectId.set(anchor.object.uuid, anchor);
+      const marker = new Group();
+      marker.name = `Kea3D Anchor ${anchor.id}`;
+      marker.userData.kea3dAnchorObjectId = anchor.object.uuid;
+
+      const origin = new Mesh(
+        new SphereGeometry(0.18, 12, 8),
+        new MeshBasicMaterial({
+          color: this.accentColor,
+          depthTest: false,
+          depthWrite: false,
+          toneMapped: false,
+          transparent: true,
+          opacity: 0.92,
+        }),
+      );
+      origin.renderOrder = 10_100;
+      origin.userData.kea3dAnchorObjectId = anchor.object.uuid;
+      marker.add(origin);
+
+      const axes = new AxesHelper(1);
+      const materials = Array.isArray(axes.material) ? axes.material : [axes.material];
+      materials.forEach((material) => {
+        material.depthTest = false;
+        material.depthWrite = false;
+        material.transparent = true;
+        material.opacity = 0.95;
+      });
+      axes.renderOrder = 10_099;
+      axes.userData.kea3dAnchorObjectId = anchor.object.uuid;
+      marker.add(axes);
+
+      this.anchorGroup.add(marker);
+      this.anchorMarkers.set(anchor.object, marker);
+    });
+    this.anchorGroup.visible = this.anchorsVisible && anchors.length > 0;
+    this.updateAnchorMarkers();
+  }
+
+  private anchorInfo(anchor: ComponentAnchor): AnchorInfo {
+    anchor.object.updateWorldMatrix(true, false);
+    const position = anchor.object.getWorldPosition(new Vector3());
+    const rotation = anchor.object.getWorldQuaternion(new Quaternion()).normalize();
+    return {
+      objectId: anchor.object.uuid,
+      id: anchor.id,
+      name: anchor.name,
+      parentName: anchor.parentName,
+      position: position.toArray(),
+      rotation: rotation.toArray(),
+    };
+  }
+
+  private updateAnchorMarkers(): void {
+    if (!this.anchorGroup.visible) return;
+    const viewportHeight = Math.max(this.renderer.domElement.clientHeight, 1);
+    this.anchorMarkers.forEach((marker, source) => {
+      source.updateWorldMatrix(true, false);
+      source.getWorldPosition(marker.position);
+      source.getWorldQuaternion(marker.quaternion);
+      const worldPerPixel = this.camera === this.perspectiveCamera
+        ? 2 * this.camera.position.distanceTo(marker.position) * Math.tan(MathUtils.degToRad(this.perspectiveCamera.fov) / 2) / viewportHeight
+        : (this.orthographicCamera.top - this.orthographicCamera.bottom) / this.orthographicCamera.zoom / viewportHeight;
+      marker.scale.setScalar(Math.max(worldPerPixel * 24, 0.000_001));
+      marker.visible = this.isEffectivelyVisible(source);
+      const selected = this.selectedObjects.includes(source);
+      const origin = marker.children.find((child) => child instanceof Mesh) as Mesh | undefined;
+      if (origin?.material instanceof MeshBasicMaterial) origin.material.opacity = selected ? 1 : 0.78;
+    });
+  }
+
+  private clearAnchors(): void {
+    this.anchorMarkers.forEach((marker) => {
+      this.anchorGroup.remove(marker);
+      disposeObject3D(marker);
+    });
+    this.anchorMarkers.clear();
+    this.anchorByObjectId.clear();
+    this.currentAnchors = [];
+    this.anchorGroup.visible = false;
+  }
+
   private prepareInspectionTools(): void {
     if (!this.currentModel) return;
     this.currentModel.updateMatrixWorld(true);
@@ -1312,9 +1423,22 @@ export class Viewer {
   }
 
   private notifySelectionChange(): void {
+    const selectedAnchors = this.selectedObjects
+      .map((object) => this.anchorByObjectId.get(object.uuid))
+      .filter((anchor): anchor is ComponentAnchor => anchor !== undefined)
+      .map((anchor) => this.anchorInfo(anchor));
+    const geometryObjects = this.selectedObjects.filter((object) => !this.anchorByObjectId.has(object.uuid));
+    const geometryInfo = geometryObjects.length > 0 ? analyzeSelections(geometryObjects) : null;
     this.onSelectionChange(
       this.selectedObjects.map((object) => object.uuid),
-      this.selectedObjects.length > 0 ? analyzeSelections(this.selectedObjects) : null,
+      this.selectedObjects.length > 0 ? {
+        meshes: geometryInfo?.meshes ?? 0,
+        vertices: geometryInfo?.vertices ?? 0,
+        triangles: geometryInfo?.triangles ?? 0,
+        materials: geometryInfo?.materials ?? 0,
+        dimensions: geometryInfo?.dimensions ?? [0, 0, 0],
+        ...(selectedAnchors.length > 0 ? { anchors: selectedAnchors } : {}),
+      } : null,
     );
   }
 
@@ -1331,6 +1455,11 @@ export class Viewer {
   private selectionBounds(): Box3 {
     const bounds = new Box3();
     this.selectedObjects.forEach((object) => bounds.expandByObject(object));
+    if (bounds.isEmpty() && this.selectedObjects.length > 0) {
+      const center = this.selectedObjects.at(-1)!.getWorldPosition(new Vector3());
+      const modelSize = this.currentModel ? new Box3().setFromObject(this.currentModel).getSize(new Vector3()).length() : 1;
+      bounds.setFromCenterAndSize(center, new Vector3(1, 1, 1).multiplyScalar(Math.max(modelSize * 0.04, 0.001)));
+    }
     return bounds;
   }
 
@@ -1644,6 +1773,15 @@ export class Viewer {
       }
       this.setViewSelectorVisible(false);
       return;
+    }
+    if (this.anchorsVisible) {
+      const anchorHit = this.raycaster.intersectObject(this.anchorGroup, true)[0]?.object;
+      const anchorObjectId = anchorHit?.userData.kea3dAnchorObjectId;
+      if (typeof anchorObjectId === 'string') {
+        const longPress = start.pointerType === 'touch' && performance.now() - start.time >= 450;
+        this.selectObject(anchorObjectId, event.ctrlKey || event.metaKey || longPress);
+        return;
+      }
     }
     const hit = this.raycaster.intersectObject(this.currentModel, true)
       .find((intersection) => intersection.object instanceof Mesh);

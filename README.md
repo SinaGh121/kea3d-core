@@ -16,6 +16,8 @@ Then open the local URL shown by Vite and drop a supported model. Current import
 - Compatibility conversion: BLEND through a lazy local Assimp worker. New or feature-heavy Blender files may still need export to GLB.
 - Assembly projects: validated `.kea3d` Project v1 manifests and self-contained `.kea3dp` packages with reusable GLB instances and fixed anchor-to-anchor attachments.
 
+Project/component anchors can be shown in the viewport and Scene objects tree, selected, fitted, and inspected by stable ID, parent, world position, and rotation. Anchor helpers are inspection-only and are excluded from geometry bounds and model exports.
+
 Select companion material, binary, and texture files together with the main model when the format references external files.
 On the web/PWA, use **Open project folder**, select the `.kea3d` manifest and referenced GLBs together, or open one self-contained `.kea3dp`. Desktop apps and file associations securely resolve referenced GLBs relative to transparent manifests automatically. Kea3D validates the graph, optional resource integrity metadata, anchors, and packaged ZIP boundary before replacing the open model. Its Export workspace saves manifests, packs or atomically resaves `.kea3dp` transports, and creates standard flattened GLBs with resolved assembly transforms.
 

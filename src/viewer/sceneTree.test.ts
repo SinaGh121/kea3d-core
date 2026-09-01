@@ -22,4 +22,18 @@ describe('buildSceneTree', () => {
     expect(tree[0].children[0].children[0].name).toBe('Part 1');
     expect(objects.has(mesh.uuid)).toBe(true);
   });
+
+  it('keeps non-renderable Anchor nodes in the inspectable hierarchy', () => {
+    const root = new Group();
+    const anchor = new Group();
+    anchor.name = 'Base mount';
+    anchor.userData = { kea3d: { anchor: { id: 'base', version: 1 } } };
+    root.add(anchor);
+
+    const objects = new Map();
+    const tree = buildSceneTree(root, objects);
+
+    expect(tree[0].children[0]).toMatchObject({ name: 'Base mount', type: 'anchor' });
+    expect(objects.get(anchor.uuid)).toBe(anchor);
+  });
 });
