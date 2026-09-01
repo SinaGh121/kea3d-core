@@ -68,6 +68,7 @@ export interface LoadedModel {
   initialSourceUnit: LinearUnit;
   initialUpAxis: UpAxis;
   initialForwardAxis: ForwardAxis;
+  project?: Kea3dProjectSession;
 }
 
 export type ViewerTheme = 'dark' | 'light';
@@ -89,3 +90,4 @@ export interface CameraState {
   projection: CameraProjection;
   orthographicHeight?: number;
 }
+import type { Kea3dProjectSession } from '@/project/projectFormat';

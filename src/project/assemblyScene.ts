@@ -97,8 +97,10 @@ export function buildFixedAssemblyScene(
       targetInstance.id,
       targetInstance.resource,
     );
-    group.matrixAutoUpdate = false;
     group.matrix.copy(targetAnchor).multiply(sourceAnchor.clone().invert());
+    group.matrix.decompose(group.position, group.quaternion, group.scale);
+    group.matrixAutoUpdate = true;
+    group.updateMatrix();
     targetGroup.add(group);
   }
 

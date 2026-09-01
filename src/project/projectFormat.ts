@@ -61,6 +61,12 @@ export interface Kea3dProjectDocument {
   [key: string]: unknown;
 }
 
+export interface Kea3dProjectSession {
+  document: Kea3dProjectDocument;
+  manifestFile: File;
+  resourceFiles: ReadonlyMap<string, File>;
+}
+
 function fail(message: string): never {
   throw new Error(`Invalid Kea3D project: ${message}`);
 }
@@ -222,6 +228,11 @@ export function decodeKea3dProject(buffer: ArrayBuffer): Kea3dProjectDocument {
     fail('document must be valid UTF-8.');
   }
   return parseKea3dProjectJson(json.replace(/^\uFEFF/, ''));
+}
+
+export function serializeKea3dProject(document: Kea3dProjectDocument): string {
+  const validated = parseKea3dProjectJson(JSON.stringify(document));
+  return `${JSON.stringify(validated, null, 2)}\n`;
 }
 
 export function rootProjectResource(document: Kea3dProjectDocument): Kea3dProjectResource {

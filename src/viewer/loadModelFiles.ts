@@ -12,7 +12,7 @@ import { createCadCacheKey, readCadCache, writeCadCache } from './cadCache';
 import { createArchiveEntryFilter } from './archiveSafety';
 import { sanitizeCadImportResult } from './cadResult';
 import { consumePreparedModel } from './preparedModel';
-import { changedProjectResourceIssue, decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, ProjectResourceRecoveryError, resolveProjectResourceFiles, type Kea3dProjectDocument, type ProjectResourceRecoveryIssue } from '../project/projectFormat';
+import { changedProjectResourceIssue, decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, ProjectResourceRecoveryError, resolveProjectResourceFiles, type Kea3dProjectDocument, type Kea3dProjectSession, type ProjectResourceRecoveryIssue } from '../project/projectFormat';
 import { buildFixedAssemblyScene } from '../project/assemblyScene';
 import { disposeObject3D } from './disposeObject';
 
@@ -23,6 +23,7 @@ interface LoadedModelSource {
   totalSize: number;
   sourceUnit: LinearUnit;
   upAxis: UpAxis;
+  project?: Kea3dProjectSession;
 }
 
 async function verifyProjectResourceIntegrity(
@@ -98,6 +99,7 @@ export async function loadModelFiles(
         totalSize: projectFile.size + resourceFile.size,
         sourceUnit: 'm',
         upAxis: 'y',
+        project: { document: project, manifestFile: projectFile, resourceFiles },
       };
     }
 
@@ -116,6 +118,7 @@ export async function loadModelFiles(
         totalSize: projectFile.size + [...new Set(resourceFiles.values())].reduce((total, file) => total + file.size, 0),
         sourceUnit: 'm',
         upAxis: 'y',
+        project: { document: project, manifestFile: projectFile, resourceFiles },
       };
     } catch (error) {
       resourceScenes.forEach(disposeObject3D);

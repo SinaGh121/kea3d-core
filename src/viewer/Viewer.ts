@@ -355,6 +355,7 @@ export class Viewer {
       initialSourceUnit: sourceUnit,
       initialUpAxis: upAxis,
       initialForwardAxis: this.initialForwardAxis,
+      project: loaded.project,
     };
   }
 

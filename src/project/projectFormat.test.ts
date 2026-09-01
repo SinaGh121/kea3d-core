@@ -10,6 +10,7 @@ import {
   resolveProjectResourceFile,
   resolveProjectResourceFiles,
   rootProjectResource,
+  serializeKea3dProject,
   type Kea3dProjectDocument,
 } from './projectFormat';
 
@@ -55,6 +56,14 @@ describe('Kea3D project format v1', () => {
   it('decodes a UTF-8 manifest with a byte-order mark', () => {
     const bytes = new TextEncoder().encode(`\uFEFF${JSON.stringify(project())}`);
     expect(decodeKea3dProject(bytes.buffer).version).toBe(1);
+  });
+
+  it('serializes a validated project deterministically and round trips optional data', () => {
+    const parsed = parseKea3dProjectJson(JSON.stringify(project({ metadata: { revision: 4 } }))) as Kea3dProjectDocument;
+    const serialized = serializeKea3dProject(parsed);
+    expect(serialized.endsWith('\n')).toBe(true);
+    expect(parseKea3dProjectJson(serialized)).toEqual(parsed);
+    expect(serializeKea3dProject(parseKea3dProjectJson(serialized))).toBe(serialized);
   });
 
   it.each([

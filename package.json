@@ -1,7 +1,7 @@
 {
   "name": "kea3d",
   "private": true,
-  "version": "0.1.69",
+  "version": "0.1.70",
   "type": "module",
   "scripts": {
     "sync:decoders": "node scripts/sync-three-decoders.mjs",

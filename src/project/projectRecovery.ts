@@ -16,6 +16,8 @@ function projectFileWithDocument(projectFile: File, project: Kea3dProjectDocumen
   if (projectFile.webkitRelativePath) {
     Object.defineProperty(next, 'webkitRelativePath', { value: projectFile.webkitRelativePath });
   }
+  const sourcePath = (projectFile as File & { kea3dSourcePath?: string }).kea3dSourcePath;
+  if (sourcePath) Object.defineProperty(next, 'kea3dSourcePath', { value: sourcePath });
   return next;
 }
 

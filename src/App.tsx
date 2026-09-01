@@ -30,7 +30,7 @@ import { decodeSharedView, encodeSharedView } from '@/viewer/sharedView';
 import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, materialCategoryNames, materialPresets, type MaterialFinish, type MaterialPresetOptions, type MaterialTone } from '@/viewer/materialPresets';
 import { isNativeShell } from '@/nativeShell';
 import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
-import type { ProjectResourceRecoveryIssue } from '@/project/projectFormat';
+import type { Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
 
 const acceptedExtensions = ['.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
 const productWebsite = 'https://kea3d.com';
@@ -47,12 +47,13 @@ const legalDocuments = {
     load: () => import('../THIRD_PARTY_NOTICES.md?raw').then(({ default: content }) => content),
   },
 } as const;
-type NativeOpenFile = { id: number; name: string; size: number; requiresStreaming: boolean; sourceUrl: string | null; nativeCadAvailable: boolean; relativePath: string | null };
+type NativeOpenFile = { id: number; name: string; size: number; requiresStreaming: boolean; sourceUrl: string | null; sourcePath: string | null; nativeCadAvailable: boolean; relativePath: string | null };
 type NativeOpenBytes = ArrayBuffer | Uint8Array | number[];
 type ThumbnailProviderStatus = { available: boolean; enabled: boolean; format: string };
 type ProjectResourceRecoveryState = { files: File[]; issues: ProjectResourceRecoveryIssue[] };
 const windowsThumbnailPreferenceKey = 'kea3d.windows-thumbnails.preference.v1';
 const ProjectRecoveryPanel = lazy(() => import('@/project/ProjectRecoveryPanel'));
+const ProjectSaveControls = lazy(() => import('@/project/ProjectSaveControls'));
 
 function windowsThumbnailPreference(): 'enabled' | 'disabled' | null {
   try {
@@ -655,6 +656,8 @@ export default function App() {
   const [changingThumbnailProvider, setChangingThumbnailProvider] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [projectRecovery, setProjectRecovery] = useState<ProjectResourceRecoveryState | null>(null);
+  const [projectSession, setProjectSession] = useState<Kea3dProjectSession | null>(null);
+  const [savingProject, setSavingProject] = useState(false);
   const [infoVisible, setInfoVisible] = useState(initialSettings.panels.modelInfoVisible);
   const [gridVisible, setGridVisible] = useState(initialSettings.viewer.gridVisible);
   const [displayMode, setDisplayMode] = useState<DisplayMode>(initialSettings.viewer.displayMode);
@@ -966,6 +969,7 @@ export default function App() {
         viewer.fit('iso');
       }
       setModelInfo(loaded.info);
+      setProjectSession(loaded.project ?? null);
       setSceneTree(loaded.sceneTree);
       setSelectedIds([]);
       selectedIdsRef.current = [];
@@ -1184,6 +1188,9 @@ export default function App() {
             const file = new File([buffer], entry.name, { lastModified: Date.now() });
             if (entry.relativePath) {
               Object.defineProperty(file, 'webkitRelativePath', { value: entry.relativePath });
+            }
+            if (entry.sourcePath) {
+              Object.defineProperty(file, 'kea3dSourcePath', { value: entry.sourcePath });
             }
             registerPreloadedFileBuffer(file, buffer);
             files.push(file);
@@ -1706,7 +1713,7 @@ export default function App() {
         onlyVisible: exportScope === 'visible',
         includeAnimations: exportAnimations,
       });
-      const suggestedName = `${modelInfo.fileName.replace(/\.[^.]+$/, '')}-fixed.glb`;
+      const suggestedName = `${modelInfo.fileName.replace(/\.[^.]+$/, '')}-${projectSession ? 'flattened' : 'fixed'}.glb`;
       if (nativeShell) {
         const [{ save }, { writeFile }] = await Promise.all([
           import('@tauri-apps/plugin-dialog'),
@@ -1727,11 +1734,33 @@ export default function App() {
         link.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
       }
-      toast.success(exportScope === 'visible' ? 'Visible objects exported to GLB' : 'Complete model exported to GLB');
+      toast.success(exportScope === 'visible' ? 'Visible objects exported to GLB' : projectSession ? 'Project flattened to GLB' : 'Complete model exported to GLB');
     } catch (exportError) {
       showError(exportError instanceof Error ? exportError.message : 'The corrected model could not be exported.');
     } finally {
       setExporting(false);
+    }
+  };
+  const saveProject = async (saveAs: boolean) => {
+    if (!projectSession) return;
+    setSavingProject(true);
+    try {
+      const { saveProjectSession } = await import('@/project/projectSave');
+      const result = await saveProjectSession({
+        session: projectSession,
+        fileName: modelInfo?.fileName ?? projectSession.manifestFile.name,
+        nativeShell,
+        desktopNativeShell,
+        saveAs,
+      });
+      if (!result.cancelled) {
+        setProjectSession(result.session);
+        toast.success(result.message);
+      }
+    } catch (saveError) {
+      showError(saveError instanceof Error ? saveError.message : 'The project could not be saved.');
+    } finally {
+      setSavingProject(false);
     }
   };
   const saveScreenshot = async () => {
@@ -2706,11 +2735,20 @@ export default function App() {
           {modelInfo && exportVisible && (
             <ResponsivePanel
               title="Export"
-              description="Create a new binary glTF copy"
+              description="Project and binary glTF output"
               onClose={() => setExportVisible(false)}
               desktopClassName="absolute top-20 right-5 z-20 w-[330px] gap-3 bg-card/92 shadow-2xl backdrop-blur-md"
               contentClassName="grid gap-3"
             >
+              {projectSession && (
+                <Suspense fallback={null}>
+                  <ProjectSaveControls
+                    saving={savingProject}
+                    onSave={() => void saveProject(false)}
+                    onSaveAs={() => void saveProject(true)}
+                  />
+                </Suspense>
+              )}
               <div className="flex items-center justify-between rounded-xl border bg-muted/25 p-3">
                 <div>
                   <p className="text-xs font-medium">Binary glTF</p>
@@ -2738,8 +2776,8 @@ export default function App() {
                 </span>
                 <Switch checked={exportAnimations && animations.length > 0} disabled={animations.length === 0} onCheckedChange={setExportAnimations} aria-label="Include animations" />
               </label>
-              <Button disabled={exporting} onClick={() => void exportCorrectedGlb()}><Download /> {exporting ? 'Exporting…' : 'Export GLB'}</Button>
-              <p className="text-[10px] leading-relaxed text-muted-foreground">Includes hierarchy, current transforms, and applied materials. Selection highlights, grid, section cut, and exploded-view spacing are not baked. The source file is never overwritten.</p>
+              <Button disabled={exporting} onClick={() => void exportCorrectedGlb()}><Download /> {exporting ? 'Exporting…' : projectSession ? 'Export flattened GLB' : 'Export GLB'}</Button>
+              <p className="text-[10px] leading-relaxed text-muted-foreground">Includes hierarchy, current transforms, and applied materials. Selection highlights, grid, section cut, and exploded-view spacing are not baked. GLB export never overwrites the project or component files.</p>
             </ResponsivePanel>
           )}
 

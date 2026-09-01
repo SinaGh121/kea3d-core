@@ -94,6 +94,7 @@ struct PendingOpenFileMetadata {
     source_url: Option<String>,
     native_cad_available: bool,
     relative_path: Option<String>,
+    source_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -631,6 +632,10 @@ fn take_pending_open_files(
                 FilePath::Url(url) => Some(url.to_string()),
                 FilePath::Path(_) => None,
             };
+            let source_path = match &file.source {
+                FilePath::Path(path) => Some(path.to_string_lossy().into_owned()),
+                FilePath::Url(_) => None,
+            };
             readable.insert(
                 file.id,
                 ReadableOpenFile {
@@ -648,9 +653,104 @@ fn take_pending_open_files(
                 source_url,
                 native_cad_available,
                 relative_path: file.relative_path,
+                source_path,
             }
         })
         .collect()
+}
+
+fn validate_project_save(destination: &Path, contents: &[u8]) -> Result<(), String> {
+    if !destination
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("kea3d"))
+    {
+        return Err("Kea3D projects must use the .kea3d extension.".to_owned());
+    }
+    if contents.is_empty() || contents.len() > 2 * 1024 * 1024 {
+        return Err("The Kea3D project document has an invalid size.".to_owned());
+    }
+    let project: ProjectDocumentProbe = serde_json::from_slice(contents)
+        .map_err(|error| format!("The Kea3D project document is invalid: {error}"))?;
+    if project.format != "kea3d-project"
+        || project.version != 1
+        || project.resources.is_empty()
+        || project.resources.len() > 1024
+        || project.instances.is_empty()
+        || project.instances.len() > 10_000
+    {
+        return Err("The Kea3D project document is invalid.".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn replace_project_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    let replaced = destination.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    let replacement = temporary.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    let result = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result == 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_project_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(temporary, destination)
+}
+
+fn write_project_file_atomic(destination: &Path, contents: &[u8]) -> Result<(), String> {
+    validate_project_save(destination, contents)?;
+    let parent = destination
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| "The project destination folder does not exist.".to_owned())?;
+    let stem = destination.file_name().and_then(OsStr::to_str).unwrap_or("project.kea3d");
+    let mut temporary = None;
+    for attempt in 0..100_u32 {
+        let candidate = parent.join(format!(".{stem}.{}.{}.tmp", std::process::id(), attempt));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(mut file) => {
+                let write_result = file.write_all(contents).and_then(|_| file.sync_all());
+                if let Err(error) = write_result {
+                    let _ = std::fs::remove_file(&candidate);
+                    return Err(format!("Could not write the project safely: {error}"));
+                }
+                temporary = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Could not prepare the project save: {error}")),
+        }
+    }
+    let temporary = temporary.ok_or_else(|| "Could not reserve a temporary project file.".to_owned())?;
+    let result = if destination.exists() {
+        replace_project_file(&temporary, destination)
+    } else {
+        std::fs::rename(&temporary, destination)
+    };
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("Could not replace the project file: {error}"));
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
+async fn save_project_file_atomic(path: String, contents: Vec<u8>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || write_project_file_atomic(Path::new(&path), &contents))
+        .await
+        .map_err(|error| format!("The project save task could not finish: {error}"))?
 }
 
 #[cfg(target_os = "windows")]
@@ -1076,6 +1176,7 @@ pub fn run() {
             read_pending_open_file,
             read_pending_open_file_chunk,
             finish_pending_open_file,
+            save_project_file_atomic,
             get_thumbnail_provider_status,
             set_thumbnail_provider_enabled
         ])
@@ -1106,6 +1207,22 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saves_project_documents_with_atomic_create_and_replace() {
+        let root = std::env::temp_dir().join(format!("kea3d-project-save-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("assembly.kea3d");
+        let first = br#"{"format":"kea3d-project","version":1,"resources":[{"id":"part","uri":"part.glb"}],"instances":[{"resource":"part"}]}"#;
+        let second = br#"{"format":"kea3d-project","version":1,"resources":[{"id":"part","uri":"part.glb"}],"instances":[{"resource":"part"}],"name":"updated"}"#;
+        write_project_file_atomic(&destination, first).unwrap();
+        write_project_file_atomic(&destination, second).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), second);
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+        assert!(write_project_file_atomic(&root.join("project.json"), first).is_err());
+        assert!(write_project_file_atomic(&destination, b"not json").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn queues_only_existing_supported_model_files() {

@@ -11,9 +11,9 @@ The current opening slice resolves all referenced GLBs explicitly selected with
 the manifest, discovers version-one anchor metadata, and evaluates fixed
 multi-instance attachments without mutating source assets. Desktop project-
 relative resolution, explicit web/PWA project-folder selection, optional resource
-integrity checks, and session-only recovery are implemented. Anchor authoring,
-Save/Save As, joints, and canonical
-website publication remain later gates.
+integrity checks, recovery, validated Save/Save As, and flattened GLB export are
+implemented. Anchor authoring, joints, and canonical website publication remain
+later gates.
 
 `ANCHOR_ATTACHMENT_SYSTEM.md` is the detailed authority for Anchor,
 Attachment, and Joint semantics. The core rule is that Anchors define location
@@ -269,8 +269,8 @@ archive tests are release gates.
 3. Add GLB anchor discovery and authoring with stable metadata. **Discovery complete; authoring remains.**
 4. Add multi-file/folder project opening with missing-resource recovery. **Complete for desktop relative resolution, web/PWA folder selection, optional integrity checks, and session-only locate/replace/accept/remove recovery.**
 5. Add instances and attachment evaluation without mutating source assets. **Complete for fixed attachments.**
-6. Add transactional save, Save As, and migration fixtures.
-7. Add flattened GLB export and reopen validation.
+6. Add transactional save, Save As, and migration fixtures. **Complete for validated version-one manifests and atomic desktop replacement.**
+7. Add flattened GLB export and reopen validation. **Complete.**
 8. Add bounded `.kea3dp` pack/unpack only after transparent external projects
    and their Save/Save As recovery behavior are proven.
 

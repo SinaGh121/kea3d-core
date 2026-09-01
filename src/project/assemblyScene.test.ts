@@ -39,7 +39,7 @@ function project(): Kea3dProjectDocument {
 }
 
 describe('Kea3D fixed assembly scenes', () => {
-  it('discovers GLB anchor metadata and resolves nested instance transforms', () => {
+  it('discovers GLB anchor metadata and resolves nested instance transforms as exportable TRS', () => {
     const scene = buildFixedAssemblyScene(project(), new Map([
       ['base-model', component([{ id: 'mount', x: 5 }])],
       ['arm-model', component([{ id: 'origin', x: 1 }, { id: 'end', x: 4 }])],
@@ -49,8 +49,9 @@ describe('Kea3D fixed assembly scenes', () => {
     const tip = scene.getObjectByName('tip')!;
     expect(arm.parent).toBe(base);
     expect(tip.parent).toBe(arm);
-    expect(arm.position.x).toBe(0);
+    expect(arm.position.x).toBeCloseTo(4);
     expect(arm.matrix.elements[12]).toBeCloseTo(4);
+    expect(tip.position.x).toBeCloseTo(3);
     expect(tip.matrix.elements[12]).toBeCloseTo(3);
     expect(tip.getWorldPosition(scene.position.clone()).x).toBeCloseTo(7);
     const tree = buildSceneTree(scene, new Map());
