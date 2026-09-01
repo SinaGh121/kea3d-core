@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  acceptProjectResourceChanges,
   KEA3D_PROJECT_SCHEMA,
   decodeKea3dProject,
   normalizeProjectResourceUri,
   parseKea3dProjectJson,
+  ProjectResourceRecoveryError,
+  removeProjectResources,
   resolveProjectResourceFile,
   resolveProjectResourceFiles,
   rootProjectResource,
@@ -33,6 +36,20 @@ describe('Kea3D project format v1', () => {
     expect(parsed.name).toBe('Robot');
     expect(rootProjectResource(parsed).uri).toBe('components/chassis.glb');
     expect(parsed.metadata).toEqual({ customer: 'Example' });
+  });
+
+  it('validates and normalizes optional resource integrity metadata', () => {
+    const parsed = parseKea3dProjectJson(JSON.stringify(project({
+      resources: [{
+        id: 'chassis-model',
+        uri: 'components/chassis.glb',
+        integrity: { byteLength: 42, sha256: 'A'.repeat(64) },
+      }],
+    })));
+    expect(parsed.resources[0].integrity).toEqual({ byteLength: 42, sha256: 'a'.repeat(64) });
+    expect(() => parseKea3dProjectJson(JSON.stringify(project({
+      resources: [{ id: 'chassis-model', uri: 'components/chassis.glb', integrity: { sha256: 'bad' } }],
+    })))).toThrow('64-character hexadecimal digest');
   });
 
   it('decodes a UTF-8 manifest with a byte-order mark', () => {
@@ -93,6 +110,46 @@ describe('Kea3D project format v1', () => {
     const component = file('chassis.glb');
     expect(resolveProjectResourceFile(parsed, manifest, [manifest, component])).toBe(component);
     expect(() => resolveProjectResourceFile(parsed, manifest, [manifest])).toThrow('Choose the .kea3d project and its referenced GLB together');
+  });
+
+  it('reports every missing referenced resource in one recovery error', () => {
+    const parsed = parseKea3dProjectJson(JSON.stringify(project({
+      resources: [
+        { id: 'chassis-model', uri: 'components/chassis.glb' },
+        { id: 'wheel-model', uri: 'components/wheel.glb' },
+      ],
+      instances: [
+        { id: 'chassis', resource: 'chassis-model' },
+        { id: 'wheel', resource: 'wheel-model', attachment: { sourceAnchor: 'base', targetInstance: 'chassis', targetAnchor: 'mount' } },
+      ],
+    }))) as Kea3dProjectDocument;
+    try {
+      resolveProjectResourceFiles(parsed, file('robot.kea3d'), []);
+      throw new Error('Expected recovery error');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProjectResourceRecoveryError);
+      expect((error as ProjectResourceRecoveryError).issues).toHaveLength(2);
+      expect((error as ProjectResourceRecoveryError).issues[0].requiredByRoot).toBe(true);
+    }
+  });
+
+  it('accepts changed integrity or removes an unavailable optional subtree in memory', () => {
+    const parsed = parseKea3dProjectJson(JSON.stringify(project({
+      resources: [
+        { id: 'chassis-model', uri: 'chassis.glb', integrity: { byteLength: 10 } },
+        { id: 'wheel-model', uri: 'wheel.glb' },
+      ],
+      instances: [
+        { id: 'chassis', resource: 'chassis-model' },
+        { id: 'wheel', resource: 'wheel-model', attachment: { sourceAnchor: 'base', targetInstance: 'chassis', targetAnchor: 'mount' } },
+        { id: 'cap', resource: 'chassis-model', attachment: { sourceAnchor: 'base', targetInstance: 'wheel', targetAnchor: 'cap' } },
+      ],
+    }))) as Kea3dProjectDocument;
+    expect(acceptProjectResourceChanges(parsed, new Set(['chassis-model'])).resources[0].integrity).toBeUndefined();
+    const reduced = removeProjectResources(parsed, new Set(['wheel-model']));
+    expect(reduced.instances.map((instance) => instance.id)).toEqual(['chassis']);
+    expect(reduced.resources.map((resource) => resource.id)).toEqual(['chassis-model']);
+    expect(() => removeProjectResources(parsed, new Set(['chassis-model']))).toThrow('root project resource cannot be removed');
   });
 
   it('resolves each referenced resource once for multi-instance projects', () => {

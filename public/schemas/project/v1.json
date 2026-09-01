@@ -43,8 +43,21 @@
       "required": ["id", "uri"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "uri": { "$ref": "#/$defs/resourceUri" }
+        "uri": { "$ref": "#/$defs/resourceUri" },
+        "integrity": { "$ref": "#/$defs/resourceIntegrity" }
       },
+      "additionalProperties": true
+    },
+    "resourceIntegrity": {
+      "type": "object",
+      "properties": {
+        "byteLength": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
+      },
+      "anyOf": [
+        { "required": ["byteLength"] },
+        { "required": ["sha256"] }
+      ],
       "additionalProperties": true
     },
     "attachment": {

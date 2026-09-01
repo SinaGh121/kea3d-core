@@ -8,7 +8,32 @@ const idPattern = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
 export interface Kea3dProjectResource {
   id: string;
   uri: string;
+  integrity?: Kea3dProjectResourceIntegrity;
   [key: string]: unknown;
+}
+
+export interface Kea3dProjectResourceIntegrity {
+  byteLength?: number;
+  sha256?: string;
+  [key: string]: unknown;
+}
+
+export interface ProjectResourceRecoveryIssue {
+  kind: 'missing' | 'ambiguous' | 'changed';
+  resourceId: string;
+  uri: string;
+  message: string;
+  requiredByRoot: boolean;
+}
+
+export class ProjectResourceRecoveryError extends Error {
+  readonly issues: ProjectResourceRecoveryIssue[];
+
+  constructor(issues: ProjectResourceRecoveryIssue[]) {
+    super(issues.length === 1 ? issues[0].message : `${issues.length} project resources need attention.`);
+    this.name = 'ProjectResourceRecoveryError';
+    this.issues = issues;
+  }
 }
 
 export interface Kea3dProjectAttachment {
@@ -87,7 +112,25 @@ function parseResources(value: unknown): Kea3dProjectResource[] {
     const canonicalPath = uri.toLowerCase();
     if (paths.has(canonicalPath)) fail(`resource path "${uri}" collides with another resource path.`);
     paths.add(canonicalPath);
-    return { ...record, id, uri } as Kea3dProjectResource;
+    let integrity: Kea3dProjectResourceIntegrity | undefined;
+    if (record.integrity !== undefined) {
+      const source = objectRecord(record.integrity, `resources[${index}].integrity`);
+      const byteLength = source.byteLength;
+      const sha256 = source.sha256;
+      if (byteLength === undefined && sha256 === undefined) fail(`resources[${index}].integrity must declare byteLength or sha256.`);
+      if (byteLength !== undefined && (!Number.isSafeInteger(byteLength) || (byteLength as number) < 0)) {
+        fail(`resources[${index}].integrity.byteLength must be a non-negative safe integer.`);
+      }
+      if (sha256 !== undefined && (typeof sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(sha256))) {
+        fail(`resources[${index}].integrity.sha256 must be a 64-character hexadecimal digest.`);
+      }
+      integrity = {
+        ...source,
+        ...(byteLength === undefined ? {} : { byteLength: byteLength as number }),
+        ...(sha256 === undefined ? {} : { sha256: (sha256 as string).toLowerCase() }),
+      };
+    }
+    return { ...record, id, uri, ...(integrity ? { integrity } : {}) } as Kea3dProjectResource;
   });
 }
 
@@ -198,14 +241,21 @@ export function resolveProjectResourceFile(
   files: readonly File[],
 ): File {
   const resource = rootProjectResource(project);
-  return resolveResourceFile(resource, projectFile, files);
+  const result = resolveResourceFile(project, resource, projectFile, files);
+  if (isProjectResourceRecoveryIssue(result)) throw new ProjectResourceRecoveryError([result]);
+  return result;
+}
+
+function isProjectResourceRecoveryIssue(value: File | ProjectResourceRecoveryIssue): value is ProjectResourceRecoveryIssue {
+  return 'kind' in value;
 }
 
 function resolveResourceFile(
+  project: Kea3dProjectDocument,
   resource: Kea3dProjectResource,
   projectFile: File,
   files: readonly File[],
-): File {
+): File | ProjectResourceRecoveryIssue {
   const projectPath = normalizedSelectedPath(projectFile);
   const slash = projectPath.lastIndexOf('/');
   const projectDirectory = slash >= 0 ? projectPath.slice(0, slash + 1) : '';
@@ -216,8 +266,13 @@ function resolveResourceFile(
   const shortName = resource.uri.split('/').pop()?.toLowerCase();
   const basenameMatches = files.filter((file) => file !== projectFile && file.name.toLowerCase() === shortName);
   if (basenameMatches.length === 1) return basenameMatches[0];
-  if (basenameMatches.length > 1) throw new Error(`Project resource "${resource.uri}" is ambiguous. Select the project folder so Kea3D can match its relative path.`);
-  throw new Error(`Project resource "${resource.uri}" is missing. Choose the .kea3d project and its referenced GLB together.`);
+  const requiredByRoot = project.instances.find((instance) => instance.id === project.rootInstance)?.resource === resource.id;
+  if (basenameMatches.length > 1) {
+    const message = `Project resource "${resource.uri}" is ambiguous. Select the project folder so Kea3D can match its relative path.`;
+    return { kind: 'ambiguous', resourceId: resource.id, uri: resource.uri, message, requiredByRoot };
+  }
+  const message = `Project resource "${resource.uri}" is missing. Choose the .kea3d project and its referenced GLB together.`;
+  return { kind: 'missing', resourceId: resource.id, uri: resource.uri, message, requiredByRoot };
 }
 
 export function resolveProjectResourceFiles(
@@ -226,7 +281,68 @@ export function resolveProjectResourceFiles(
   files: readonly File[],
 ): Map<string, File> {
   const referencedResourceIds = new Set(project.instances.map((instance) => instance.resource));
-  return new Map(project.resources
-    .filter((resource) => referencedResourceIds.has(resource.id))
-    .map((resource) => [resource.id, resolveResourceFile(resource, projectFile, files)]));
+  const resolved = new Map<string, File>();
+  const issues: ProjectResourceRecoveryIssue[] = [];
+  for (const resource of project.resources) {
+    if (!referencedResourceIds.has(resource.id)) continue;
+    const result = resolveResourceFile(project, resource, projectFile, files);
+    if (isProjectResourceRecoveryIssue(result)) issues.push(result);
+    else resolved.set(resource.id, result);
+  }
+  if (issues.length > 0) throw new ProjectResourceRecoveryError(issues);
+  return resolved;
+}
+
+export function changedProjectResourceIssue(
+  project: Kea3dProjectDocument,
+  resource: Kea3dProjectResource,
+  message: string,
+): ProjectResourceRecoveryIssue {
+  return {
+    kind: 'changed',
+    resourceId: resource.id,
+    uri: resource.uri,
+    message,
+    requiredByRoot: project.instances.find((instance) => instance.id === project.rootInstance)?.resource === resource.id,
+  };
+}
+
+export function acceptProjectResourceChanges(
+  project: Kea3dProjectDocument,
+  resourceIds: ReadonlySet<string>,
+): Kea3dProjectDocument {
+  return parseKea3dProjectJson(JSON.stringify({
+    ...project,
+    resources: project.resources.map((resource) => resourceIds.has(resource.id)
+      ? Object.fromEntries(Object.entries(resource).filter(([key]) => key !== 'integrity'))
+      : resource),
+  }));
+}
+
+export function removeProjectResources(
+  project: Kea3dProjectDocument,
+  resourceIds: ReadonlySet<string>,
+): Kea3dProjectDocument {
+  const root = project.instances.find((instance) => instance.id === project.rootInstance);
+  if (root && resourceIds.has(root.resource)) throw new Error('The root project resource cannot be removed. Locate or replace it instead.');
+  const removedInstances = new Set(project.instances
+    .filter((instance) => resourceIds.has(instance.resource))
+    .map((instance) => instance.id));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const instance of project.instances) {
+      if (!removedInstances.has(instance.id) && instance.attachment && removedInstances.has(instance.attachment.targetInstance)) {
+        removedInstances.add(instance.id);
+        changed = true;
+      }
+    }
+  }
+  const instances = project.instances.filter((instance) => !removedInstances.has(instance.id));
+  const retainedResourceIds = new Set(instances.map((instance) => instance.resource));
+  return parseKea3dProjectJson(JSON.stringify({
+    ...project,
+    resources: project.resources.filter((resource) => retainedResourceIds.has(resource.id)),
+    instances,
+  }));
 }

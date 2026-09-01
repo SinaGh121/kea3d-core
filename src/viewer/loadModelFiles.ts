@@ -2,7 +2,7 @@ import { DoubleSide, Group, Mesh, MeshStandardMaterial, type AnimationClip, type
 import { loadGltfFiles } from './loadGltfFiles';
 import { buildCadScene, parseCadInWorker } from './loadCadFile';
 import { loadAssimpFiles } from './loadAssimpFiles';
-import { fileExtension, readFileBuffer } from './localFile';
+import { fileExtension, readFileBuffer, registerPreloadedFileBuffer } from './localFile';
 import { createLocalFileManager } from './localFileManager';
 import { threeMfUnitFromXml } from './threeMfUnit';
 import type { LinearUnit, LoadProgress, UpAxis } from './types';
@@ -12,7 +12,7 @@ import { createCadCacheKey, readCadCache, writeCadCache } from './cadCache';
 import { createArchiveEntryFilter } from './archiveSafety';
 import { sanitizeCadImportResult } from './cadResult';
 import { consumePreparedModel } from './preparedModel';
-import { decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, resolveProjectResourceFile, resolveProjectResourceFiles } from '../project/projectFormat';
+import { changedProjectResourceIssue, decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, ProjectResourceRecoveryError, resolveProjectResourceFiles, type Kea3dProjectDocument, type ProjectResourceRecoveryIssue } from '../project/projectFormat';
 import { buildFixedAssemblyScene } from '../project/assemblyScene';
 import { disposeObject3D } from './disposeObject';
 
@@ -23,6 +23,43 @@ interface LoadedModelSource {
   totalSize: number;
   sourceUnit: LinearUnit;
   upAxis: UpAxis;
+}
+
+async function verifyProjectResourceIntegrity(
+  project: Kea3dProjectDocument,
+  resourceFiles: ReadonlyMap<string, File>,
+  onProgress: (progress: LoadProgress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const issues: ProjectResourceRecoveryIssue[] = [];
+  for (const resource of project.resources) {
+    const file = resourceFiles.get(resource.id);
+    const integrity = resource.integrity;
+    if (!file || !integrity) continue;
+    if (integrity.byteLength !== undefined && file.size !== integrity.byteLength) {
+      issues.push(changedProjectResourceIssue(
+        project,
+        resource,
+        `Project resource "${resource.uri}" changed size: expected ${integrity.byteLength} bytes, found ${file.size}.`,
+      ));
+      continue;
+    }
+    if (!integrity.sha256) continue;
+    const buffer = await readFileBuffer(file, onProgress, signal);
+    throwIfLoadCancelled(signal);
+    registerPreloadedFileBuffer(file, buffer);
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('');
+    if (digest !== integrity.sha256) {
+      issues.push(changedProjectResourceIssue(
+        project,
+        resource,
+        `Project resource "${resource.uri}" does not match its recorded SHA-256 digest.`,
+      ));
+    }
+  }
+  if (issues.length > 0) throw new ProjectResourceRecoveryError(issues);
 }
 
 export async function loadModelFiles(
@@ -46,8 +83,12 @@ export async function loadModelFiles(
     const projectBuffer = await readFileBuffer(projectFile, onProgress, signal);
     throwIfLoadCancelled(signal);
     const project = decodeKea3dProject(projectBuffer);
+    const resourceFiles = resolveProjectResourceFiles(project, projectFile, files);
+    await verifyProjectResourceIntegrity(project, resourceFiles, onProgress, signal);
     if (project.instances.length === 1) {
-      const resourceFile = resolveProjectResourceFile(project, projectFile, files);
+      const root = project.instances[0];
+      const resourceFile = root && resourceFiles.get(root.resource);
+      if (!resourceFile) throw new Error('Invalid Kea3D project: the root resource could not be resolved.');
       const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
       if (!gltf.scene.name.trim()) gltf.scene.name = project.name;
       return {
@@ -60,7 +101,6 @@ export async function loadModelFiles(
       };
     }
 
-    const resourceFiles = resolveProjectResourceFiles(project, projectFile, files);
     const resourceScenes = new Map<string, Object3D>();
     try {
       for (const [resourceId, resourceFile] of resourceFiles) {

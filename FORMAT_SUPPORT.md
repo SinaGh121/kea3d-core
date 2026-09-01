@@ -5,7 +5,7 @@ the features used by the authoring tool.
 
 | Format | Status | Notes |
 | --- | --- | --- |
-| KEA3D Project v1 | Fixed assemblies | Validated reusable GLB instances and deterministic anchor attachments. Desktop resolves project-relative GLBs automatically; web/PWA supports explicit project-folder selection. Save/Save As and joints remain planned. |
+| KEA3D Project v1 | Fixed assemblies | Validated reusable GLB instances, deterministic anchor attachments, secure relative resolution, optional integrity checks, and session-only missing/changed-resource recovery. Save/Save As and joints remain planned. |
 | GLB / glTF | Primary | Scenes, PBR materials, textures, animations, Draco, Meshopt, and KTX2/Basis. Select external `.bin` and texture files with `.gltf`. |
 | STEP / STP | Primary CAD | Worker-based OpenCascade tessellation; assemblies and colors depend on source metadata. |
 | IGES / IGS / BREP | Primary CAD | Worker-based OpenCascade tessellation. |
@@ -24,9 +24,10 @@ reusable project-local GLB components. Version 1 schema parsing, bounded path/ID
 validation, graph validation, multi-resource opening, anchor discovery, and
 fixed attachment transforms are implemented. Desktop filesystem opens resolve
 safe project-relative GLBs automatically. Web/PWA provides an explicit project-
-folder picker and still supports selecting companions together. Missing resources
-or anchors are reported without replacing the open model. Per-resource recovery,
-anchor authoring, Save/Save As, joints, and flattened export remain planned.
+folder picker and still supports selecting companions together. Missing or changed
+resources open a non-destructive recovery workspace; invalid anchors are reported
+without replacing the open model. Anchor authoring, Save/Save As, joints, and
+flattened export remain planned.
 
 The authoritative contract and implementation gates are in
 `KEA3D_PROJECT_FORMAT.md`.

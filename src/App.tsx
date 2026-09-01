@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { BetweenHorizontalStart, Box, Boxes, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Code2, Copy, Download, Ellipsis, ExternalLink, Eye, EyeOff, FileBox, FlipHorizontal2, Focus, FolderOpen, Grid3X3, Info, Keyboard, Layers3, Maximize2, Move3D, Network, Orbit, PaintBucket, Pause, Play, Redo2, Repeat2, RotateCcw, Ruler, Scale, Scan, ScanBox, ScissorsLineDashed, Settings2, Share2, Sun, Undo2, Upload, View, X } from 'lucide-react';
 import packageMetadata from '../package.json';
 import { Button } from '@/components/ui/button';
@@ -30,6 +30,7 @@ import { decodeSharedView, encodeSharedView } from '@/viewer/sharedView';
 import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, materialCategoryNames, materialPresets, type MaterialFinish, type MaterialPresetOptions, type MaterialTone } from '@/viewer/materialPresets';
 import { isNativeShell } from '@/nativeShell';
 import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
+import type { ProjectResourceRecoveryIssue } from '@/project/projectFormat';
 
 const acceptedExtensions = ['.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
 const productWebsite = 'https://kea3d.com';
@@ -49,7 +50,9 @@ const legalDocuments = {
 type NativeOpenFile = { id: number; name: string; size: number; requiresStreaming: boolean; sourceUrl: string | null; nativeCadAvailable: boolean; relativePath: string | null };
 type NativeOpenBytes = ArrayBuffer | Uint8Array | number[];
 type ThumbnailProviderStatus = { available: boolean; enabled: boolean; format: string };
+type ProjectResourceRecoveryState = { files: File[]; issues: ProjectResourceRecoveryIssue[] };
 const windowsThumbnailPreferenceKey = 'kea3d.windows-thumbnails.preference.v1';
+const ProjectRecoveryPanel = lazy(() => import('@/project/ProjectRecoveryPanel'));
 
 function windowsThumbnailPreference(): 'enabled' | 'disabled' | null {
   try {
@@ -213,6 +216,17 @@ function formatScaleFactor(factor: number): string {
   if (Math.abs(factor - 1) < 1e-9) return '1×';
   if (factor >= 0.001 && factor < 1_000) return `${Number(factor.toPrecision(6))}×`;
   return `${factor.toExponential(3)}×`;
+}
+
+function isProjectResourceRecoveryError(value: unknown): value is Error & { issues: ProjectResourceRecoveryIssue[] } {
+  if (!(value instanceof Error) || value.name !== 'ProjectResourceRecoveryError') return false;
+  const issues = (value as Error & { issues?: unknown }).issues;
+  return Array.isArray(issues) && issues.every((issue) => (
+    typeof issue === 'object' && issue !== null
+    && ['missing', 'ambiguous', 'changed'].includes(String((issue as { kind?: unknown }).kind))
+    && typeof (issue as { resourceId?: unknown }).resourceId === 'string'
+    && typeof (issue as { uri?: unknown }).uri === 'string'
+  ));
 }
 
 const accentOptions: Array<{ value: AccentColor; label: string; color: string }> = [
@@ -614,6 +628,7 @@ export default function App() {
   const viewerPromiseRef = useRef<Promise<Viewer> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const projectFolderInputRef = useRef<HTMLInputElement>(null);
+  const projectRecoveryInputRef = useRef<HTMLInputElement>(null);
   const settingsInputRef = useRef<HTMLInputElement>(null);
   const loadAbortRef = useRef<AbortController | null>(null);
   const nativeOpenQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -639,6 +654,7 @@ export default function App() {
   const [thumbnailProvider, setThumbnailProvider] = useState<ThumbnailProviderStatus | null>(null);
   const [changingThumbnailProvider, setChangingThumbnailProvider] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [projectRecovery, setProjectRecovery] = useState<ProjectResourceRecoveryState | null>(null);
   const [infoVisible, setInfoVisible] = useState(initialSettings.panels.modelInfoVisible);
   const [gridVisible, setGridVisible] = useState(initialSettings.viewer.gridVisible);
   const [displayMode, setDisplayMode] = useState<DisplayMode>(initialSettings.viewer.displayMode);
@@ -711,7 +727,7 @@ export default function App() {
   const windowsNativeShell = desktopNativeShell && /Windows/i.test(navigator.userAgent);
   const compactLayerOpen = compactLayout && (
     mobileDisplayVisible || mobileToolsVisible || settingsVisible || infoVisible || treeVisible
-    || adjustVisible || materialVisible || exportVisible || animationVisible || sectionVisible || measurementVisible || lightingVisible
+    || adjustVisible || materialVisible || exportVisible || animationVisible || sectionVisible || measurementVisible || lightingVisible || projectRecovery !== null
   );
   useEffect(() => {
     const enteredCompactLayout = compactLayout && !previousCompactLayoutRef.current;
@@ -916,6 +932,7 @@ export default function App() {
     const viewerPromise = viewerPromiseRef.current;
     if (!viewerPromise || files.length === 0) return;
     loadAbortRef.current?.abort();
+    setProjectRecovery(null);
     const controller = new AbortController();
     loadAbortRef.current = controller;
     setLoadingName(files.find((file) => /\.(kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model');
@@ -994,9 +1011,15 @@ export default function App() {
       setLightingVisible(false);
       setMeasurement({ pointCount: 0, distance: null });
       setMeasurementCopied(false);
+      setProjectRecovery(null);
     } catch (loadError) {
       if (!isLoadCancellation(loadError) && loadAbortRef.current === controller) {
-        showError(loadError instanceof Error ? loadError.message : 'The model could not be opened.');
+        if (isProjectResourceRecoveryError(loadError)) {
+          setProjectRecovery({ files, issues: loadError.issues });
+          toast.warning(loadError.message, { duration: 8_000 });
+        } else {
+          showError(loadError instanceof Error ? loadError.message : 'The model could not be opened.');
+        }
       }
     } finally {
       if (loadAbortRef.current === controller) {
@@ -1229,6 +1252,29 @@ export default function App() {
   const chooseProjectFolder = useCallback(() => {
     projectFolderInputRef.current?.click();
   }, []);
+
+  const recoverProjectWithFiles = useCallback(async (fileList: FileList | File[]) => {
+    if (!projectRecovery) return;
+    const files = Array.from(fileList);
+    try {
+      const { locateProjectResources } = await import('@/project/projectRecovery');
+      const result = locateProjectResources(projectRecovery, files);
+      if (!result.matchedAll) toast.warning('Some project resources still need attention.');
+      await loadFiles(result.files);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : String(error));
+    }
+  }, [loadFiles, projectRecovery]);
+
+  const rewriteProjectForRecovery = useCallback(async (mode: 'accept' | 'remove') => {
+    if (!projectRecovery) return;
+    try {
+      const { rewriteProjectResources } = await import('@/project/projectRecovery');
+      await loadFiles(await rewriteProjectResources(projectRecovery, mode));
+    } catch (error) {
+      showError(error instanceof Error ? error.message : String(error));
+    }
+  }, [loadFiles, projectRecovery]);
 
   const handleDrop = (event: DragEvent<HTMLElement>) => {
     event.preventDefault(); setDragging(false); void loadFiles(event.dataTransfer.files);
@@ -1743,6 +1789,7 @@ export default function App() {
         event.stopPropagation();
         if (mobileToolsVisible) setMobileToolsVisible(false);
         else if (mobileDisplayVisible) setMobileDisplayVisible(false);
+        else if (projectRecovery) setProjectRecovery(null);
         else if (lightingVisible) setLightingVisible(false);
         else if (materialVisible) closeMaterialPanel();
         else if (measurementVisible) closeMeasurement();
@@ -1812,7 +1859,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [adjustVisible, animationVisible, chooseModelFiles, closeAdjustPanel, closeMaterialPanel, closeMeasurement, compactLayerOpen, compactLayout, cycleDisplayMode, exportVisible, infoVisible, lightingVisible, materialVisible, measurementVisible, mobileDisplayVisible, mobileToolsVisible, modelInfo, redoMaterial, sectionVisible, settingsVisible, toggleGrid, toggleMaterialPanel, toggleProjection, toggleSelectionIsolation, toggleViewSelector, treeVisible, undoMaterial]);
+  }, [adjustVisible, animationVisible, chooseModelFiles, closeAdjustPanel, closeMaterialPanel, closeMeasurement, compactLayerOpen, compactLayout, cycleDisplayMode, exportVisible, infoVisible, lightingVisible, materialVisible, measurementVisible, mobileDisplayVisible, mobileToolsVisible, modelInfo, projectRecovery, redoMaterial, sectionVisible, settingsVisible, toggleGrid, toggleMaterialPanel, toggleProjection, toggleSelectionIsolation, toggleViewSelector, treeVisible, undoMaterial]);
 
   const activeAnimation = animations[animationIndex] ?? null;
   const measurementValue = measurement.distance === null ? null : formatMetricLength(measurement.distance, displayUnit);
@@ -1847,6 +1894,8 @@ export default function App() {
   ] : [];
   const compactViewportBottom = !compactLayout
     ? 0
+    : projectRecovery
+      ? compactWorkspaceHeight
     : treeVisible
       ? sceneWorkspaceExpanded ? compactWorkspaceExpandedHeight : compactSceneHeight
       : materialVisible
@@ -1889,6 +1938,8 @@ export default function App() {
             onChange={(event) => event.target.files && void loadFiles(event.target.files)} />
           <input ref={(element) => { projectFolderInputRef.current = element; element?.setAttribute('webkitdirectory', ''); }} className="sr-only" type="file" multiple accept={acceptedExtensions} aria-label="Choose Kea3D project folder"
             onChange={(event) => event.target.files && void loadFiles(event.target.files)} />
+          <input ref={projectRecoveryInputRef} className="sr-only" type="file" multiple accept=".glb,model/gltf-binary" aria-label="Locate project GLB resources"
+            onChange={(event) => { if (event.target.files) recoverProjectWithFiles(event.target.files); event.currentTarget.value = ''; }} />
           <input ref={settingsInputRef} className="sr-only" type="file" accept=".json,application/json" aria-label="Import Kea3D settings"
             onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSettings(file); }} />
 
@@ -2077,6 +2128,21 @@ export default function App() {
             >
               <LightingControls lighting={lighting} onChange={setLighting} showHeader={false} />
             </ResponsivePanel>
+          )}
+
+          {projectRecovery && (
+            <Suspense fallback={null}>
+              <ProjectRecoveryPanel
+                issues={projectRecovery.issues}
+                compact={compactLayout}
+                nativeShell={nativeShell}
+                onClose={() => setProjectRecovery(null)}
+                onLocate={() => projectRecoveryInputRef.current?.click()}
+                onChooseFolder={chooseProjectFolder}
+                onAcceptChanged={() => void rewriteProjectForRecovery('accept')}
+                onRemoveOptional={() => void rewriteProjectForRecovery('remove')}
+              />
+            </Suspense>
           )}
 
           {modelInfo && materialVisible && (

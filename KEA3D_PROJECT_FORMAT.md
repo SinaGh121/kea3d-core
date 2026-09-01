@@ -10,8 +10,9 @@ an explicit migration and backward-compatibility fixture.
 The current opening slice resolves all referenced GLBs explicitly selected with
 the manifest, discovers version-one anchor metadata, and evaluates fixed
 multi-instance attachments without mutating source assets. Desktop project-
-relative resolution and explicit web/PWA project-folder selection are implemented.
-Per-resource recovery UI, anchor authoring, Save/Save As, joints, and canonical
+relative resolution, explicit web/PWA project-folder selection, optional resource
+integrity checks, and session-only recovery are implemented. Anchor authoring,
+Save/Save As, joints, and canonical
 website publication remain later gates.
 
 `ANCHOR_ATTACHMENT_SYSTEM.md` is the detailed authority for Anchor,
@@ -104,9 +105,10 @@ version-one project.
 ```
 
 Stable IDs are machine identifiers and must be unique within their namespace.
-Display names may change without breaking attachments. A future optional source
-digest may help detect replacements, but it must warn rather than silently
-discard a user's project.
+Display names may change without breaking attachments. An optional source
+integrity record may contain a non-negative `byteLength`, a hexadecimal SHA-256
+digest, or both. Integrity mismatches require an explicit recovery choice and
+must never silently discard a user's project or overwrite a source file.
 
 ## Component anchors
 
@@ -175,17 +177,18 @@ existing local-file map. A `.kea3d` file never grants filesystem access.
 
 ## Missing and changed resources
 
-The current v1 loader is atomic: if a referenced component is missing or the
-project is invalid, Kea3D preserves the already-open model and reports the
-problem without partially replacing the scene.
-
-The planned recovery flow must:
+The v1 loader is atomic: if a referenced component is missing, ambiguous,
+changed, or invalid, Kea3D preserves the already-open model and reports every
+resource that needs attention without partially replacing the scene. The
+recovery workspace can:
 
 1. preserve the missing resource and instance records;
 2. show one clear, non-blocking project warning;
-3. allow the user to locate, replace, or intentionally remove the resource;
-4. load the rest of the valid assembly only after an explicit recovery choice;
-5. avoid overwriting the original project during recovery.
+3. locate or explicitly replace a resource;
+4. accept a changed resource by removing its stale integrity record in memory;
+5. intentionally remove unavailable non-root component subtrees in memory;
+6. load the resulting assembly only after an explicit recovery choice;
+7. avoid overwriting the original project during recovery.
 
 Invalid resources or instances must not cause valid source files to be modified.
 Saving uses a validated document and atomic replacement where the platform
@@ -264,7 +267,7 @@ archive tests are release gates.
 1. Freeze JSON Schema v1 and canonical path/ID rules. **Complete.**
 2. Add pure parser, validator, graph, and transform-resolution modules. **Complete for fixed attachments.**
 3. Add GLB anchor discovery and authoring with stable metadata. **Discovery complete; authoring remains.**
-4. Add multi-file/folder project opening with missing-resource recovery. **Desktop relative resolution, web/PWA folder selection, and atomic missing-file reporting complete; per-resource recovery remains.**
+4. Add multi-file/folder project opening with missing-resource recovery. **Complete for desktop relative resolution, web/PWA folder selection, optional integrity checks, and session-only locate/replace/accept/remove recovery.**
 5. Add instances and attachment evaluation without mutating source assets. **Complete for fixed attachments.**
 6. Add transactional save, Save As, and migration fixtures.
 7. Add flattened GLB export and reopen validation.
