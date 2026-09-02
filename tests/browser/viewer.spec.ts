@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { strToU8, zipSync } from 'fflate';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -114,6 +115,89 @@ function glbJson(buffer: Buffer): Record<string, unknown> {
   return JSON.parse(buffer.subarray(20, 20 + jsonLength).toString('utf8').trim()) as Record<string, unknown>;
 }
 
+function minimalThreeMf(): Buffer {
+  const archive = zipSync({
+    '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>'),
+    '_rels/.rels': strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
+    '3D/3dmodel.model': strToU8('<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" name="3MF triangle" type="model"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="10" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object></resources><build><item objectid="1"/></build></model>'),
+  });
+  return Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
+}
+
+function binaryStlTriangle(): Buffer {
+  const result = Buffer.alloc(84 + 50);
+  result.write('Kea3D binary STL fixture', 0, 'ascii');
+  result.writeUInt32LE(1, 80);
+  [0, 0, 1, 0, 0, 0, 10, 0, 0, 0, 10, 0].forEach((value, index) => {
+    result.writeFloatLE(value, 84 + index * 4);
+  });
+  return result;
+}
+
+function binaryPlyTriangle(): Buffer {
+  const header = Buffer.from('ply\nformat binary_little_endian 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n');
+  const body = Buffer.alloc(3 * 15 + 13);
+  const vertices: Array<[number, number, number, number, number, number]> = [
+    [0, 0, 0, 255, 0, 0],
+    [10, 0, 0, 0, 255, 0],
+    [0, 10, 0, 0, 0, 255],
+  ];
+  vertices.forEach((vertex, vertexIndex) => {
+    const offset = vertexIndex * 15;
+    body.writeFloatLE(vertex[0], offset);
+    body.writeFloatLE(vertex[1], offset + 4);
+    body.writeFloatLE(vertex[2], offset + 8);
+    body.writeUInt8(vertex[3], offset + 12);
+    body.writeUInt8(vertex[4], offset + 13);
+    body.writeUInt8(vertex[5], offset + 14);
+  });
+  body.writeUInt8(3, 45);
+  body.writeInt32LE(0, 46);
+  body.writeInt32LE(1, 50);
+  body.writeInt32LE(2, 54);
+  return Buffer.concat([header, body]);
+}
+
+const meshFormatCases: Array<{
+  label: string;
+  expectedName: RegExp;
+  files: Parameters<Locator['setInputFiles']>[0];
+}> = [
+  {
+    label: 'ASCII STL',
+    expectedName: /Open another model.*format-triangle\.stl/,
+    files: { name: 'format-triangle.stl', mimeType: 'model/stl', buffer: Buffer.from('solid triangle\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\nvertex 0 10 0\nendloop\nendfacet\nendsolid triangle') },
+  },
+  {
+    label: 'ASCII PLY with vertex colors',
+    expectedName: /Open another model.*format-triangle\.ply/,
+    files: { name: 'format-triangle.ply', mimeType: 'application/octet-stream', buffer: Buffer.from('ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n10 0 0 0 255 0\n0 10 0 0 0 255\n3 0 1 2') },
+  },
+  {
+    label: 'binary STL',
+    expectedName: /Open another model.*format-triangle-binary\.stl/,
+    files: { name: 'format-triangle-binary.stl', mimeType: 'model/stl', buffer: binaryStlTriangle() },
+  },
+  {
+    label: 'binary little-endian PLY with vertex colors',
+    expectedName: /Open another model.*format-triangle-binary\.ply/,
+    files: { name: 'format-triangle-binary.ply', mimeType: 'application/octet-stream', buffer: binaryPlyTriangle() },
+  },
+  {
+    label: 'OBJ with MTL companion',
+    expectedName: /Open another model.*format-triangle\.obj/,
+    files: [
+      { name: 'format-triangle.obj', mimeType: 'text/plain', buffer: Buffer.from('mtllib format-triangle.mtl\no Triangle\nusemtl TestRed\nv 0 0 0\nv 10 0 0\nv 0 10 0\nf 1 2 3') },
+      { name: 'format-triangle.mtl', mimeType: 'text/plain', buffer: Buffer.from('newmtl TestRed\nKd 0.8 0.1 0.1\nNs 32') },
+    ],
+  },
+  {
+    label: '3MF package',
+    expectedName: /Open another model.*format-triangle\.3mf/,
+    files: { name: 'format-triangle.3mf', mimeType: 'model/3mf', buffer: minimalThreeMf() },
+  },
+];
+
 async function openTestModel(page: Page, includeSecondPart = false, duplicateMaterialRecords = false): Promise<void> {
   await page.locator('input[type="file"]').first().setInputFiles({
     name: 'test-triangle.glb',
@@ -211,6 +295,15 @@ test('embedded GLB textures load under the application content security policy',
   await page.waitForTimeout(250);
   expect(loaderErrors).toEqual([]);
 });
+
+for (const formatCase of meshFormatCases) {
+  test(`${formatCase.label} passes the production import gate`, async ({ page }) => {
+    await page.goto('/');
+    await page.locator('input[type="file"]').first().setInputFiles(formatCase.files);
+    await expect(page.getByRole('button', { name: formatCase.expectedName })).toBeVisible();
+    await expect(page.getByText('The model does not contain renderable triangle geometry.')).toHaveCount(0);
+  });
+}
 
 test('web project folder selection preserves relative paths and opens its manifest', async ({ page }) => {
   await page.goto('/');

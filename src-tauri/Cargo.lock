@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "kea3d"
-version = "0.1.80"
+version = "0.1.81"
 dependencies = [
  "percent-encoding",
  "serde",

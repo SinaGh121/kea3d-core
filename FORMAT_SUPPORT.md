@@ -49,3 +49,8 @@ original file.
 Large STL and PLY geometry is decoded in workers. STEP, IGES, BREP, and BLEND
 conversion also runs in workers. Edge extraction falls back to wireframe for very
 large individual meshes to avoid blocking the interface.
+
+The release suite opens generated, redistribution-safe GLB, ASCII and binary
+STL, colored ASCII and binary little-endian PLY, OBJ/MTL, and 3MF triangle
+fixtures through the production browser load path. CAD, large-file,
+texture-companion, and scene-format coverage remains fixture-specific.
