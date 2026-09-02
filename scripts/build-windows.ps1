@@ -55,6 +55,8 @@ try {
   if (-not $SkipChecks) {
     npm run check
     if ($LASTEXITCODE -ne 0) { throw 'Quality checks failed.' }
+    npm run check:rust
+    if ($LASTEXITCODE -ne 0) { throw 'Rust quality checks failed.' }
   }
 
   npx tauri icon .\dist\kea3d-icon.svg -o .\src-tauri\icons

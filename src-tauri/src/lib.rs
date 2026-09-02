@@ -6,7 +6,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::{ChildStdin, Command, Stdio},
+    process::ChildStdin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -17,6 +17,9 @@ use tauri::Emitter;
 use tauri::Url;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
+
+#[cfg(target_os = "windows")]
+use std::process::{Command, Stdio};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
@@ -37,7 +40,9 @@ const PICKER_RESOURCE_EXTENSIONS: &[&str] =
     &["mtl", "bin", "png", "jpg", "jpeg", "webp", "avif", "ktx2"];
 const NATIVE_OPEN_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROJECT_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
+#[cfg(target_os = "windows")]
 const THUMBNAIL_PROVIDER_CLSID: &str = "{E50D62FC-E508-4A2D-82AF-A3290688D78C}";
+#[cfg(target_os = "windows")]
 const LEGACY_THUMBNAIL_PROVIDER_CLSIDS: &[&str] = &[
     "{7142101B-D67D-4B30-BBD6-4BB965CCA2AF}",
     "{27BE9363-C920-44A7-A384-6584C285935E}",
@@ -49,7 +54,9 @@ const LEGACY_THUMBNAIL_PROVIDER_CLSIDS: &[&str] = &[
     "{A8D177C0-27C4-42D9-B134-F849D6CD9820}",
 ];
 const THUMBNAIL_PROVIDER_FILENAME: &str = "Kea3DThumbnailProvider.dll";
+#[cfg(target_os = "windows")]
 const THUMBNAIL_HANDLER_IID: &str = "{E357FCCD-A995-4576-B01F-234630154E96}";
+#[cfg(target_os = "windows")]
 const THUMBNAIL_EXTENSIONS: &[&str] = &["glb", "stl", "ply", "step", "stp"];
 
 #[derive(Clone)]
@@ -152,6 +159,7 @@ fn registered_thumbnail_provider_path() -> Option<PathBuf> {
     key.get_value::<String, _>("").ok().map(PathBuf::from)
 }
 
+#[cfg(target_os = "windows")]
 fn is_kea_thumbnail_provider(value: &str) -> bool {
     value.eq_ignore_ascii_case(THUMBNAIL_PROVIDER_CLSID)
         || LEGACY_THUMBNAIL_PROVIDER_CLSIDS
@@ -690,8 +698,16 @@ fn replace_project_file(temporary: &Path, destination: &Path) -> std::io::Result
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
 
-    let replaced = destination.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-    let replacement = temporary.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    let replaced = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let replacement = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
     let result = unsafe {
         ReplaceFileW(
             replaced.as_ptr(),
@@ -702,7 +718,11 @@ fn replace_project_file(temporary: &Path, destination: &Path) -> std::io::Result
             std::ptr::null_mut(),
         )
     };
-    if result == 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -716,11 +736,18 @@ fn write_project_file_atomic(destination: &Path, contents: &[u8]) -> Result<(), 
         .parent()
         .filter(|parent| parent.is_dir())
         .ok_or_else(|| "The project destination folder does not exist.".to_owned())?;
-    let stem = destination.file_name().and_then(OsStr::to_str).unwrap_or("project.kea3d");
+    let stem = destination
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("project.kea3d");
     let mut temporary = None;
     for attempt in 0..100_u32 {
         let candidate = parent.join(format!(".{stem}.{}.{}.tmp", std::process::id(), attempt));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
             Ok(mut file) => {
                 let write_result = file.write_all(contents).and_then(|_| file.sync_all());
                 if let Err(error) = write_result {
@@ -734,7 +761,8 @@ fn write_project_file_atomic(destination: &Path, contents: &[u8]) -> Result<(), 
             Err(error) => return Err(format!("Could not prepare the project save: {error}")),
         }
     }
-    let temporary = temporary.ok_or_else(|| "Could not reserve a temporary project file.".to_owned())?;
+    let temporary =
+        temporary.ok_or_else(|| "Could not reserve a temporary project file.".to_owned())?;
     let result = if destination.exists() {
         replace_project_file(&temporary, destination)
     } else {
@@ -749,9 +777,11 @@ fn write_project_file_atomic(destination: &Path, contents: &[u8]) -> Result<(), 
 
 #[tauri::command(async)]
 async fn save_project_file_atomic(path: String, contents: Vec<u8>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || write_project_file_atomic(Path::new(&path), &contents))
-        .await
-        .map_err(|error| format!("The project save task could not finish: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        write_project_file_atomic(Path::new(&path), &contents)
+    })
+    .await
+    .map_err(|error| format!("The project save task could not finish: {error}"))?
 }
 
 fn commit_project_package(temporary: &Path, destination: &Path) -> Result<(), String> {
@@ -769,26 +799,53 @@ fn commit_project_package(temporary: &Path, destination: &Path) -> Result<(), St
     if temporary.parent() != Some(destination_parent) {
         return Err("The temporary package must be in the destination folder.".to_owned());
     }
-    let destination_name = destination.file_name().and_then(OsStr::to_str).ok_or_else(|| "The package destination is invalid.".to_owned())?;
-    let temporary_name = temporary.file_name().and_then(OsStr::to_str).unwrap_or_default();
-    if !temporary_name.starts_with(&format!(".{destination_name}.")) || !temporary_name.ends_with(".tmp") {
+    let destination_name = destination
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| "The package destination is invalid.".to_owned())?;
+    let temporary_name = temporary
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default();
+    if !temporary_name.starts_with(&format!(".{destination_name}."))
+        || !temporary_name.ends_with(".tmp")
+    {
         return Err("The temporary package name is invalid.".to_owned());
     }
-    let metadata = std::fs::symlink_metadata(temporary).map_err(|error| format!("The temporary package is unavailable: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > MAX_PROJECT_PACKAGE_BYTES {
+    let metadata = std::fs::symlink_metadata(temporary)
+        .map_err(|error| format!("The temporary package is unavailable: {error}"))?;
+    if !metadata.file_type().is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_PROJECT_PACKAGE_BYTES
+    {
         let _ = std::fs::remove_file(temporary);
         return Err("The temporary package has an invalid size or type.".to_owned());
     }
-    if destination.exists() && std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?.file_type().is_symlink() {
+    if destination.exists()
+        && std::fs::symlink_metadata(destination)
+            .map_err(|error| error.to_string())?
+            .file_type()
+            .is_symlink()
+    {
         let _ = std::fs::remove_file(temporary);
         return Err("A packaged project cannot replace a symbolic link.".to_owned());
     }
-    let sync_result = std::fs::OpenOptions::new().read(true).write(true).open(temporary).and_then(|file| file.sync_all());
+    let sync_result = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(temporary)
+        .and_then(|file| file.sync_all());
     if let Err(error) = sync_result {
         let _ = std::fs::remove_file(temporary);
-        return Err(format!("Could not finish writing the packaged project: {error}"));
+        return Err(format!(
+            "Could not finish writing the packaged project: {error}"
+        ));
     }
-    let result = if destination.exists() { replace_project_file(temporary, destination) } else { std::fs::rename(temporary, destination) };
+    let result = if destination.exists() {
+        replace_project_file(temporary, destination)
+    } else {
+        std::fs::rename(temporary, destination)
+    };
     if let Err(error) = result {
         let _ = std::fs::remove_file(temporary);
         return Err(format!("Could not replace the packaged project: {error}"));
@@ -797,7 +854,10 @@ fn commit_project_package(temporary: &Path, destination: &Path) -> Result<(), St
 }
 
 #[tauri::command(async)]
-async fn commit_project_package_file(temporary_path: String, destination_path: String) -> Result<(), String> {
+async fn commit_project_package_file(
+    temporary_path: String,
+    destination_path: String,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         commit_project_package(Path::new(&temporary_path), Path::new(&destination_path))
     })
@@ -1001,11 +1061,11 @@ async fn import_pending_native_cad(
         let state = NativeCadState {
             sessions: cad_state.sessions.clone(),
         };
-        return tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             run_native_cad_import(source, readable.size, session_id, events, state)
         })
         .await
-        .map_err(|error| format!("The native CAD task could not finish: {error}"))?;
+        .map_err(|error| format!("The native CAD task could not finish: {error}"))?
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1271,7 +1331,11 @@ mod tests {
         write_project_file_atomic(&destination, first).unwrap();
         write_project_file_atomic(&destination, second).unwrap();
         assert_eq!(std::fs::read(&destination).unwrap(), second);
-        assert!(std::fs::read_dir(&root).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
         assert!(write_project_file_atomic(&root.join("project.json"), first).is_err());
         assert!(write_project_file_atomic(&destination, b"not json").is_err());
         std::fs::remove_dir_all(root).unwrap();

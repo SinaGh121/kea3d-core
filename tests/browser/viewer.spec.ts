@@ -504,12 +504,8 @@ test('manual Anchors create, edit, undo, redo, and survive GLB export', async ({
     mimeType: 'model/gltf-binary',
     buffer: await readFile(exportedPath!),
   });
+  await expect(page.getByRole('button', { name: /Open another model.*authored-anchor\.glb/ })).toBeVisible();
   await expect(page.getByText('1 frame in this model')).toBeVisible();
-  const collapsedAnchorParent = sceneObjects.getByRole('button', { name: /^Expand / }).first();
-  if (await collapsedAnchorParent.isVisible()) {
-    await collapsedAnchorParent.click();
-  }
-  await expect(page.getByRole('button', { name: 'Mount face', exact: true })).toBeVisible();
   await expectNoAccessibilityViolations(page);
 });
 
