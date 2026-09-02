@@ -1,4 +1,4 @@
-import { Matrix4, Quaternion, Vector3, type Object3D } from 'three';
+import { Euler, MathUtils, Matrix4, Quaternion, Vector3, type Object3D } from 'three';
 
 const anchorIdPattern = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
 const unitScaleTolerance = 1e-5;
@@ -11,6 +11,13 @@ export interface ComponentAnchor {
   position: [number, number, number];
   rotation: [number, number, number, number];
   parentName: string | null;
+}
+
+export interface AnchorEditInput {
+  id: string;
+  name: string;
+  position: [number, number, number];
+  rotation: [number, number, number];
 }
 
 function anchorError(resourceId: string, message: string): never {
@@ -30,10 +37,36 @@ export function anchorIdForObject(object: Object3D, resourceId: string): string 
   return record.id;
 }
 
+export function validateAnchorEditInput(input: AnchorEditInput, existingIds: Iterable<string>, previousId?: string): AnchorEditInput {
+  const id = input.id.trim();
+  const name = input.name.trim();
+  if (!anchorIdPattern.test(id)) throw new Error('Anchor ID must start with a letter and use only letters, numbers, dot, underscore, or dash.');
+  if (name.length < 1 || name.length > 128) throw new Error('Anchor name must contain 1 to 128 characters.');
+  if ([...input.position, ...input.rotation].some((value) => !Number.isFinite(value))) throw new Error('Anchor position and rotation must contain finite numbers.');
+  if ([...existingIds].some((existingId) => existingId === id && existingId !== previousId)) throw new Error(`Anchor ID "${id}" is already used.`);
+  return { id, name, position: [...input.position], rotation: [...input.rotation] };
+}
+
+export function applyAnchorEdit(object: Object3D, input: AnchorEditInput): void {
+  object.name = input.name;
+  object.position.fromArray(input.position);
+  object.quaternion.setFromEuler(new Euler(
+    MathUtils.degToRad(input.rotation[0]),
+    MathUtils.degToRad(input.rotation[1]),
+    MathUtils.degToRad(input.rotation[2]),
+    'XYZ',
+  ));
+  object.scale.set(1, 1, 1);
+  object.userData.kea3d = {
+    ...(typeof object.userData.kea3d === 'object' && object.userData.kea3d !== null ? object.userData.kea3d : {}),
+    anchor: { version: 1, id: input.id },
+  };
+}
+
 export function discoverComponentAnchorDetails(
   scene: Object3D,
   resourceId: string,
-  options: { allowDuplicateIds?: boolean } = {},
+  options: { allowDuplicateIds?: boolean; allowInheritedScale?: boolean } = {},
 ): ComponentAnchor[] {
   scene.updateMatrixWorld(true);
   const anchors: ComponentAnchor[] = [];
@@ -50,7 +83,7 @@ export function discoverComponentAnchorDetails(
     if (![...position.toArray(), ...rotation.toArray(), ...scale.toArray()].every(Number.isFinite)) {
       anchorError(resourceId, `anchor "${id}" has a non-finite transform.`);
     }
-    if (Math.abs(scale.x - 1) > unitScaleTolerance || Math.abs(scale.y - 1) > unitScaleTolerance || Math.abs(scale.z - 1) > unitScaleTolerance) {
+    if (!options.allowInheritedScale && (Math.abs(scale.x - 1) > unitScaleTolerance || Math.abs(scale.y - 1) > unitScaleTolerance || Math.abs(scale.z - 1) > unitScaleTolerance)) {
       anchorError(resourceId, `anchor "${id}" must not contain scale.`);
     }
     if (Math.abs(rotation.length() - 1) > unitScaleTolerance) anchorError(resourceId, `anchor "${id}" has an invalid rotation.`);

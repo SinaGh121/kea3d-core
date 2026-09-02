@@ -46,6 +46,8 @@ export interface AnchorInfo {
   parentName: string | null;
   position: [number, number, number];
   rotation: [number, number, number, number];
+  localPosition: [number, number, number];
+  localRotation: [number, number, number];
 }
 
 export interface SceneNode {

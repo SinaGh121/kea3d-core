@@ -7,6 +7,7 @@ import {
   Color,
   DirectionalLight,
   EdgesGeometry,
+  Euler,
   GridHelper,
   Group,
   HemisphereLight,
@@ -56,8 +57,8 @@ import { throwIfLoadCancelled } from './loadControl';
 import { validateImportedScene } from './validateImportedScene';
 import { defaultMaterialPresetOptions, findMaterialPreset, type MaterialPreset, type MaterialPresetOptions } from './materialPresets';
 import { CommandHistory, type ReversibleCommand } from '../commandHistory';
-import { discoverComponentAnchorDetails, type ComponentAnchor } from '@/project/componentAnchors';
-import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RotationMode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
+import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, validateAnchorEditInput, type AnchorEditInput, type ComponentAnchor } from '@/project/componentAnchors';
+import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
 
 const viewDirections: Record<CameraView, Vector3> = {
   // Canonical Kea3D preview direction. Keep the native thumbnail-provider basis
@@ -197,6 +198,7 @@ export class Viewer {
   private currentAnchors: ComponentAnchor[] = [];
   private readonly anchorByObjectId = new Map<string, ComponentAnchor>();
   private readonly anchorMarkers = new Map<Object3D, Group>();
+  private currentSceneTree: SceneNode[] = [];
   private anchorsVisible = true;
   private readonly selectionOverlays = new Map<Mesh, {
     group: Group;
@@ -344,6 +346,7 @@ export class Viewer {
     this.prepareAnimations();
     this.modelRoot.add(scene);
     const sceneTree = buildSceneTree(scene, this.objectById);
+    this.currentSceneTree = sceneTree;
     this.prepareAnchors(anchors);
     this.prepareInspectionTools();
     this.applyLighting();
@@ -376,6 +379,88 @@ export class Viewer {
     this.anchorsVisible = visible;
     this.anchorGroup.visible = visible && this.currentAnchors.length > 0;
     this.invalidate();
+  }
+
+  getSceneDocumentState(): { sceneTree: SceneNode[]; anchors: AnchorInfo[] } {
+    return {
+      sceneTree: this.currentSceneTree,
+      anchors: this.currentAnchors.map((anchor) => this.anchorInfo(anchor)),
+    };
+  }
+
+  createAnchor(): string {
+    if (!this.currentModel) throw new Error('Open a model before creating an Anchor.');
+    const ids = new Set(this.currentAnchors.map((anchor) => anchor.id));
+    let index = 1;
+    let id = 'anchor';
+    while (ids.has(id)) id = `anchor-${++index}`;
+    const name = index === 1 ? 'Anchor' : `Anchor ${index}`;
+    const object = new Group();
+    const boundsTarget = this.selectedObjects.some((selected) => !this.anchorByObjectId.has(selected.uuid))
+      ? this.selectedObjects.filter((selected) => !this.anchorByObjectId.has(selected.uuid))
+      : [this.currentModel];
+    const bounds = new Box3();
+    boundsTarget.forEach((selected) => bounds.expandByObject(selected));
+    const worldCenter = bounds.isEmpty() ? this.currentModel.getWorldPosition(new Vector3()) : bounds.getCenter(new Vector3());
+    const localCenter = this.currentModel.worldToLocal(worldCenter.clone());
+    const input: AnchorEditInput = { id, name, position: localCenter.toArray(), rotation: [0, 0, 0] };
+    applyAnchorEdit(object, input);
+    const parent = this.currentModel;
+    this.commandHistory.execute({
+      label: 'Create Anchor',
+      apply: () => {
+        parent.add(object);
+        this.refreshAnchorDocument([object.uuid]);
+      },
+      revert: () => {
+        parent.remove(object);
+        this.refreshAnchorDocument([]);
+      },
+    });
+    return object.uuid;
+  }
+
+  updateAnchor(objectId: string, input: AnchorEditInput): void {
+    const anchor = this.anchorByObjectId.get(objectId);
+    if (!anchor) throw new Error('Select an Anchor before editing it.');
+    const object = anchor.object;
+    const before = this.anchorEditInput(object, anchor.id);
+    const after = validateAnchorEditInput(input, this.currentAnchors.filter((candidate) => candidate.object !== object).map((candidate) => candidate.id));
+    this.commandHistory.execute({
+      label: 'Edit Anchor',
+      apply: () => {
+        applyAnchorEdit(object, after);
+        this.refreshAnchorDocument([object.uuid]);
+      },
+      revert: () => {
+        applyAnchorEdit(object, before);
+        this.refreshAnchorDocument([object.uuid]);
+      },
+    });
+  }
+
+  deleteAnchor(objectId: string): void {
+    const anchor = this.anchorByObjectId.get(objectId);
+    const object = anchor?.object;
+    const parent = object?.parent;
+    if (!object || !parent) throw new Error('Select an Anchor before deleting it.');
+    const childIndex = parent.children.indexOf(object);
+    this.commandHistory.execute({
+      label: 'Delete Anchor',
+      apply: () => {
+        parent.remove(object);
+        this.refreshAnchorDocument([]);
+      },
+      revert: () => {
+        parent.add(object);
+        const appendedIndex = parent.children.indexOf(object);
+        if (childIndex >= 0 && appendedIndex >= 0 && childIndex !== appendedIndex) {
+          parent.children.splice(appendedIndex, 1);
+          parent.children.splice(childIndex, 0, object);
+        }
+        this.refreshAnchorDocument([object.uuid]);
+      },
+    });
   }
 
   fit(view?: CameraView): void {
@@ -1277,6 +1362,7 @@ export class Viewer {
     anchor.object.updateWorldMatrix(true, false);
     const position = anchor.object.getWorldPosition(new Vector3());
     const rotation = anchor.object.getWorldQuaternion(new Quaternion()).normalize();
+    const localEuler = new Euler().setFromQuaternion(anchor.object.quaternion, 'XYZ');
     return {
       objectId: anchor.object.uuid,
       id: anchor.id,
@@ -1284,7 +1370,39 @@ export class Viewer {
       parentName: anchor.parentName,
       position: position.toArray(),
       rotation: rotation.toArray(),
+      localPosition: anchor.object.position.toArray(),
+      localRotation: [
+        MathUtils.radToDeg(localEuler.x),
+        MathUtils.radToDeg(localEuler.y),
+        MathUtils.radToDeg(localEuler.z),
+      ],
     };
+  }
+
+  private anchorEditInput(object: Object3D, id = anchorIdForObject(object, 'model') ?? ''): AnchorEditInput {
+    const rotation = new Euler().setFromQuaternion(object.quaternion, 'XYZ');
+    return {
+      id,
+      name: object.name.trim() || id,
+      position: object.position.toArray(),
+      rotation: [MathUtils.radToDeg(rotation.x), MathUtils.radToDeg(rotation.y), MathUtils.radToDeg(rotation.z)],
+    };
+  }
+
+  private refreshAnchorDocument(selectedObjectIds: readonly string[]): void {
+    if (!this.currentModel) return;
+    this.clearAnchors();
+    this.objectById.clear();
+    this.currentAnchors = discoverComponentAnchorDetails(this.currentModel, 'model', {
+      allowDuplicateIds: true,
+      allowInheritedScale: true,
+    });
+    this.currentSceneTree = buildSceneTree(this.currentModel, this.objectById);
+    this.prepareAnchors(this.currentAnchors);
+    this.setSelectedObjects(selectedObjectIds
+      .map((objectId) => this.objectById.get(objectId))
+      .filter((object): object is Object3D => object !== undefined));
+    this.invalidate();
   }
 
   private updateAnchorMarkers(): void {
@@ -1349,6 +1467,7 @@ export class Viewer {
     this.isolationVisibility = null;
     this.setSelectedObjects([]);
     this.objectById.clear();
+    this.currentSceneTree = [];
     this.originalPositions.clear();
     this.explodeOffsets.clear();
     this.originalMaterials.clear();

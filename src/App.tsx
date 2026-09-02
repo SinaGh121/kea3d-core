@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { BetweenHorizontalStart, Box, Boxes, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Code2, Copy, Download, Ellipsis, ExternalLink, Eye, EyeOff, FileBox, FlipHorizontal2, Focus, FolderOpen, Grid3X3, Info, Keyboard, Layers3, Maximize2, Move3D, Network, Orbit, PaintBucket, Pause, Play, Redo2, Repeat2, RotateCcw, Ruler, Scale, Scan, ScanBox, ScissorsLineDashed, Settings2, Share2, Sun, Undo2, Upload, View, X } from 'lucide-react';
-import packageMetadata from '../package.json';
+import { BetweenHorizontalStart, Box, Boxes, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Download, Ellipsis, Eye, EyeOff, FileBox, FlipHorizontal2, Focus, FolderOpen, Grid3X3, Info, Keyboard, Layers3, Maximize2, Move3D, Network, Orbit, PaintBucket, Pause, Play, Redo2, Repeat2, RotateCcw, Ruler, Scan, ScanBox, ScissorsLineDashed, Settings2, Share2, Sun, Undo2, Upload, View, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -31,10 +30,9 @@ import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, mate
 import { isNativeShell } from '@/nativeShell';
 import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
 import type { Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
+import type { AnchorEditInput } from '@/project/componentAnchors';
 
 const acceptedExtensions = ['.kea3dp', '.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
-const productWebsite = 'https://kea3d.com';
-const coreSourceRelease = `https://github.com/SinaGh121/kea3d-core/releases/tag/v${packageMetadata.version}`;
 const legalDocuments = {
   license: {
     title: 'Kea3D Core license',
@@ -55,6 +53,7 @@ const windowsThumbnailPreferenceKey = 'kea3d.windows-thumbnails.preference.v1';
 const ProjectRecoveryPanel = lazy(() => import('@/project/ProjectRecoveryPanel'));
 const ProjectSaveControls = lazy(() => import('@/project/ProjectSaveControls'));
 const AnchorInspector = lazy(() => import('@/project/AnchorInspector'));
+const AboutContent = lazy(() => import('@/project/AboutContent'));
 
 function windowsThumbnailPreference(): 'enabled' | 'disabled' | null {
   try {
@@ -666,6 +665,7 @@ export default function App() {
   const [sceneTree, setSceneTree] = useState<SceneNode[]>([]);
   const [anchorCount, setAnchorCount] = useState(0);
   const [anchorsVisible, setAnchorsVisible] = useState(true);
+  const [anchorEditing, setAnchorEditing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedIdsRef = useRef<string[]>([]);
   const selectionAnchorRef = useRef<string | null>(null);
@@ -816,6 +816,7 @@ export default function App() {
         setSelectedIds(objectIds);
         selectionAnchorRef.current = objectIds.at(-1) ?? null;
         setSelectionInfo(info);
+        setAnchorEditing(false);
         setMaterialPresetId(null);
         setMaterialOptions(null);
         setMaterialFinish(null);
@@ -976,6 +977,7 @@ export default function App() {
       setProjectSession(loaded.project ?? null);
       setSceneTree(loaded.sceneTree);
       setAnchorCount(loaded.anchors.length);
+      setAnchorEditing(false);
       setSelectedIds([]);
       selectedIdsRef.current = [];
       selectionAnchorRef.current = null;
@@ -1394,14 +1396,22 @@ export default function App() {
     setMaterialOptions(null);
     setMaterialFinish(null);
   };
+  const refreshSceneDocument = () => {
+    const document = viewerRef.current?.getSceneDocumentState();
+    if (!document) return;
+    setSceneTree(document.sceneTree);
+    setAnchorCount(document.anchors.length);
+  };
   const undoMaterial = () => {
     setMaterialEditState(viewerRef.current?.undoLastChange() ?? emptyMaterialEditState);
+    refreshSceneDocument();
     setMaterialPresetId(null);
     setMaterialOptions(null);
     setMaterialFinish(null);
   };
   const redoMaterial = () => {
     setMaterialEditState(viewerRef.current?.redoLastChange() ?? emptyMaterialEditState);
+    refreshSceneDocument();
     setMaterialPresetId(null);
     setMaterialOptions(null);
     setMaterialFinish(null);
@@ -1556,6 +1566,30 @@ export default function App() {
   const toggleAnchorsVisible = (visible: boolean) => {
     setAnchorsVisible(visible);
     viewerRef.current?.setAnchorsVisible(visible);
+  };
+  const runAnchorChange = (change: () => void, success: string, editAfter = false) => {
+    try {
+      change();
+      refreshSceneDocument();
+      setMaterialEditState(viewerRef.current?.getMaterialEditState(materialScope) ?? emptyMaterialEditState);
+      setAnchorEditing(editAfter);
+      toast.success(success);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'The Anchor change could not be completed.');
+    }
+  };
+  const createAnchor = () => {
+    if (projectSession) return;
+    runAnchorChange(() => viewerRef.current?.createAnchor(), 'Anchor created at the current selection center', true);
+    setAnchorsVisible(true);
+    viewerRef.current?.setAnchorsVisible(true);
+  };
+  const updateAnchor = (objectId: string, value: AnchorEditInput) => {
+    runAnchorChange(() => viewerRef.current?.updateAnchor(objectId, value), 'Anchor updated');
+  };
+  const deleteAnchor = (objectId: string) => {
+    if (!window.confirm('Delete this Anchor? You can undo this change.')) return;
+    runAnchorChange(() => viewerRef.current?.deleteAnchor(objectId), 'Anchor deleted');
   };
   const toggleSelectionIsolation = useCallback(() => {
     const result = viewerRef.current?.toggleSelectionIsolation();
@@ -2491,30 +2525,8 @@ export default function App() {
 
                 <AccordionItem value="about">
                   <AccordionTrigger><span className="flex items-center gap-2"><Info className="size-3.5 text-muted-foreground" />About Kea3D</span></AccordionTrigger>
-                  <AccordionContent className="grid gap-3">
-                    <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-3">
-                      <img className="size-12 shrink-0" src={`${import.meta.env.BASE_URL}kea3d-icon.svg`} alt="" />
-                      <div className="min-w-0">
-                        <p className="kea3d-wordmark text-lg font-semibold text-foreground">Kea3D</p>
-                        <p className="text-[10px] leading-relaxed text-muted-foreground">Fast, private, local-first 3D and CAD viewer.</p>
-                      </div>
-                    </div>
-                    <dl className="grid gap-1.5 text-[11px]">
-                      <div className="flex items-center justify-between gap-3"><dt className="text-muted-foreground">Version</dt><dd className="font-medium tabular-nums">{packageMetadata.version}</dd></div>
-                      <div className="flex items-center justify-between gap-3"><dt className="text-muted-foreground">Edition</dt><dd className="text-right font-medium">Free / Core</dd></div>
-                      <div className="flex items-center justify-between gap-3"><dt className="text-muted-foreground">Processing</dt><dd className="text-right font-medium">Local on this device</dd></div>
-                      <div className="flex items-center justify-between gap-3"><dt className="text-muted-foreground">Core license</dt><dd className="font-medium">MPL 2.0</dd></div>
-                    </dl>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button asChild variant="outline" size="sm"><a href={productWebsite} target="_blank" rel="noreferrer" onClick={(event) => openExternalLink(event, productWebsite)}><ExternalLink /> Website</a></Button>
-                      <Button asChild variant="outline" size="sm"><a href={coreSourceRelease} target="_blank" rel="noreferrer" onClick={(event) => openExternalLink(event, coreSourceRelease)}><Code2 /> Core source</a></Button>
-                      <Button variant="outline" size="sm" onClick={() => openLegalDocument('license')}><Scale /> Core license</Button>
-                      <Button variant="outline" size="sm" onClick={() => openLegalDocument('thirdParty')}><FileBox /> Third-party</Button>
-                    </div>
-                    <div className="grid gap-1 text-[10px] leading-relaxed text-muted-foreground">
-                      <p>This build contains the MPL-licensed Kea3D Core. No separately licensed Pro features are included.</p>
-                      <p>Model files are processed locally and are not uploaded by Kea3D.</p>
-                    </div>
+                  <AccordionContent>
+                    <Suspense fallback={null}><AboutContent onOpenExternal={openExternalLink} onOpenLegal={openLegalDocument} /></Suspense>
                   </AccordionContent>
                 </AccordionItem>
               </Accordion>
@@ -2549,7 +2561,7 @@ export default function App() {
             >
                 {selectionInfo && selectedName && (
                   <>
-                    <section aria-label="Selection details" className="grid gap-2 rounded-xl border bg-muted/35 p-2.5">
+                    <section aria-label="Selection details" className="grid max-h-[min(460px,58vh)] gap-2 overflow-y-auto rounded-xl border bg-muted/35 p-2.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0">
                           <span className="block text-[10px] text-muted-foreground">Selected</span>
@@ -2559,13 +2571,31 @@ export default function App() {
                       </div>
                       {primaryAnchor && selectionInfo.meshes === 0 ? (
                         <Suspense fallback={null}>
-                          <AnchorInspector
-                            mode="selection"
-                            id={primaryAnchor.id}
-                            parent={primaryAnchor.parentName ?? 'Model root'}
-                            position={formatMetricDimensions(primaryAnchor.position, displayUnit)}
-                            rotation={primaryAnchor.rotation.map((value) => formatDimension(value)).join(', ')}
-                          />
+                          {anchorEditing && !projectSession ? (
+                            <AnchorInspector
+                              key={primaryAnchor.objectId}
+                              mode="editor"
+                              value={{
+                                id: primaryAnchor.id,
+                                name: selectedName,
+                                position: primaryAnchor.localPosition,
+                                rotation: primaryAnchor.localRotation,
+                              }}
+                              parent={primaryAnchor.parentName ?? 'Model root'}
+                              onApply={(value) => updateAnchor(primaryAnchor.objectId, value)}
+                              onDelete={() => deleteAnchor(primaryAnchor.objectId)}
+                              onCancel={() => setAnchorEditing(false)}
+                            />
+                          ) : (
+                            <AnchorInspector
+                              mode="selection"
+                              id={primaryAnchor.id}
+                              parent={primaryAnchor.parentName ?? 'Model root'}
+                              position={formatMetricDimensions(primaryAnchor.position, displayUnit)}
+                              rotation={primaryAnchor.rotation.map((value) => formatDimension(value)).join(', ')}
+                              onEdit={projectSession ? undefined : () => setAnchorEditing(true)}
+                            />
+                          )}
                         </Suspense>
                       ) : (
                         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-4">
@@ -2580,11 +2610,20 @@ export default function App() {
                     <Separator />
                   </>
                 )}
-                {anchorCount > 0 && (
-                  <Suspense fallback={null}>
-                    <AnchorInspector mode="visibility" count={anchorCount} visible={anchorsVisible} onVisibleChange={toggleAnchorsVisible} />
-                  </Suspense>
-                )}
+                <Suspense fallback={null}>
+                  <AnchorInspector
+                    mode="visibility"
+                    count={anchorCount}
+                    visible={anchorsVisible}
+                    onVisibleChange={toggleAnchorsVisible}
+                    onCreate={projectSession ? undefined : createAnchor}
+                    canUndo={materialEditState.canUndo}
+                    canRedo={materialEditState.canRedo}
+                    onUndo={undoMaterial}
+                    onRedo={redoMaterial}
+                  />
+                </Suspense>
+                {projectSession && <p className="text-[9px] leading-relaxed text-muted-foreground">Assembly Anchors are inspection-only here. Edit the source component GLB, then repack the project.</p>}
                 <div className="grid gap-1">
                   <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">Exploded view</span><span className="tabular-nums">{Math.round(explodeFactor * 100)}%</span></div>
                   <Slider aria-label="Exploded view amount" min={0} max={100} step={1} value={[explodeFactor * 100]} onValueChange={changeExplosion} />

@@ -452,6 +452,67 @@ test('authored Anchors remain inspectable and have explicit viewport visibility 
   await expectNoAccessibilityViolations(page);
 });
 
+test('manual Anchors create, edit, undo, redo, and survive GLB export', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto('/');
+  await openTestModel(page);
+  const closeSceneObjects = page.getByRole('button', { name: 'Close scene objects' });
+  if (!await closeSceneObjects.isVisible()) {
+    await page.getByRole('toolbar', { name: 'Viewer tools' }).getByRole('button', { name: 'Scene objects' }).click();
+  }
+  const sceneObjects = closeSceneObjects.locator('xpath=ancestor::div[@data-slot="card"]');
+
+  await expect(sceneObjects.getByText('0 frames in this model')).toBeVisible();
+  await sceneObjects.getByRole('button', { name: 'Create' }).click();
+  await expect(sceneObjects.getByText('1 frame in this model')).toBeVisible();
+  await sceneObjects.getByLabel('Anchor name').fill('Mount face');
+  await sceneObjects.getByLabel('Anchor ID').fill('mount-face');
+  await sceneObjects.getByLabel('Local position X').fill('1');
+  await sceneObjects.getByLabel('Local position Y').fill('2');
+  await sceneObjects.getByLabel('Local position Z').fill('3');
+  await sceneObjects.getByLabel('Local rotation ° Y').fill('90');
+  await sceneObjects.getByRole('button', { name: 'Apply' }).click();
+  await expect(sceneObjects.getByRole('button', { name: 'Mount face', exact: true })).toBeVisible();
+
+  await sceneObjects.getByRole('button', { name: 'Revert scene change' }).click();
+  await expect(sceneObjects.getByRole('button', { name: 'Anchor', exact: true })).toBeVisible();
+  await sceneObjects.getByRole('button', { name: 'Revert scene change' }).click();
+  await expect(sceneObjects.getByText('0 frames in this model')).toBeVisible();
+  await sceneObjects.getByRole('button', { name: 'Repeat scene change' }).click();
+  await sceneObjects.getByRole('button', { name: 'Repeat scene change' }).click();
+  await expect(sceneObjects.getByRole('button', { name: 'Mount face', exact: true })).toBeVisible();
+  await sceneObjects.getByRole('button', { name: 'Mount face', exact: true }).click();
+  await sceneObjects.getByRole('button', { name: 'Edit Anchor' }).click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await sceneObjects.getByRole('button', { name: 'Delete' }).click();
+  await expect(sceneObjects.getByText('0 frames in this model')).toBeVisible();
+  await sceneObjects.getByRole('button', { name: 'Revert scene change' }).click();
+  await expect(sceneObjects.getByRole('button', { name: 'Mount face', exact: true })).toBeVisible();
+
+  await page.getByRole('toolbar', { name: 'Viewer tools' }).getByRole('button', { name: 'Export model' }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export GLB' }).click();
+  const exportedPath = await (await downloadPromise).path();
+  expect(exportedPath).not.toBeNull();
+  const exported = glbJson(await readFile(exportedPath!));
+  const anchorNode = (exported.nodes as Array<{ name?: string; translation?: number[]; extras?: unknown }>).find((node) => node.name === 'Mount face');
+  expect(anchorNode?.translation).toEqual([1, 2, 3]);
+  expect(anchorNode?.extras).toEqual({ kea3d: { anchor: { version: 1, id: 'mount-face' } } });
+
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: 'authored-anchor.glb',
+    mimeType: 'model/gltf-binary',
+    buffer: await readFile(exportedPath!),
+  });
+  await expect(page.getByText('1 frame in this model')).toBeVisible();
+  const collapsedAnchorParent = sceneObjects.getByRole('button', { name: /^Expand / }).first();
+  if (await collapsedAnchorParent.isVisible()) {
+    await collapsedAnchorParent.click();
+  }
+  await expect(page.getByRole('button', { name: 'Mount face', exact: true })).toBeVisible();
+  await expectNoAccessibilityViolations(page);
+});
+
 test('free orbit remains interactive and selected tools use a clear active state', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
