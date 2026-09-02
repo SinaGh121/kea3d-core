@@ -212,6 +212,29 @@ async function openAnimatedTestModel(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: /Open another model.*AnimatedMorphCube\.glb/ })).toBeVisible();
 }
 
+type LoadMetricDetail = {
+  fileName: string;
+  status: string;
+  renderer?: {
+    geometries: number;
+    textures: number;
+    programs: number;
+  };
+};
+
+async function loadWithMetric(
+  page: Page,
+  files: Parameters<Locator['setInputFiles']>[0],
+): Promise<LoadMetricDetail> {
+  const metric = page.evaluate(() => new Promise<LoadMetricDetail>((resolveMetric) => {
+    globalThis.addEventListener('kea3d:load-metric', (event) => {
+      resolveMetric((event as CustomEvent<LoadMetricDetail>).detail);
+    }, { once: true });
+  }));
+  await page.locator('input[type="file"]').first().setInputFiles(files);
+  return metric;
+}
+
 async function expectNoAccessibilityViolations(page: Page): Promise<void> {
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations, results.violations.map((violation) => (
@@ -294,6 +317,37 @@ test('embedded GLB textures load under the application content security policy',
   await expect(page.getByRole('button', { name: /Open another model.*embedded-texture\.glb/ })).toBeVisible();
   await page.waitForTimeout(250);
   expect(loaderErrors).toEqual([]);
+});
+
+test('repeated model replacement releases obsolete renderer resources', async ({ page }) => {
+  await page.goto('/');
+  const snapshots: LoadMetricDetail[] = [];
+
+  for (let index = 0; index < 4; index += 1) {
+    snapshots.push(await loadWithMetric(page, {
+      name: `replacement-textured-${index}.glb`,
+      mimeType: 'model/gltf-binary',
+      buffer: embeddedTextureModel(),
+    }));
+    snapshots.push(await loadWithMetric(page, {
+      name: `replacement-simple-${index}.glb`,
+      mimeType: 'model/gltf-binary',
+      buffer: triangleModel(),
+    }));
+  }
+
+  snapshots.forEach((snapshot) => {
+    expect(snapshot.status, snapshot.fileName).toBe('success');
+    expect(snapshot.renderer, snapshot.fileName).toBeDefined();
+  });
+  const simpleSnapshots = snapshots.filter((snapshot) => snapshot.fileName.includes('-simple-'));
+  const stableSimpleSnapshots = simpleSnapshots.slice(1).map((snapshot) => snapshot.renderer!);
+  const baseline = stableSimpleSnapshots[0];
+  stableSimpleSnapshots.forEach((snapshot) => {
+    expect(snapshot.geometries).toBe(baseline.geometries);
+    expect(snapshot.textures).toBe(baseline.textures);
+    expect(snapshot.programs).toBe(baseline.programs);
+  });
 });
 
 for (const formatCase of meshFormatCases) {
