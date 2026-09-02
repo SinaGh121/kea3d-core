@@ -44,4 +44,17 @@ describe('load performance metrics', () => {
     expect(() => tracker.finish('failure')).toThrow('already finished');
     expect(emitted).toHaveLength(1);
   });
+
+  it('records the CAD cache outcome without splitting one cache stage', () => {
+    const timestamps = [0, 5, 20, 30];
+    const tracker = createLoadMetricTracker('part.step', 100, () => timestamps.shift() ?? 30, () => undefined);
+    tracker.update({ stage: 'caching' });
+    tracker.update({ stage: 'caching', cadCache: 'hit' });
+    tracker.update({ stage: 'preparing' });
+
+    expect(tracker.finish('success')).toMatchObject({
+      cadCache: 'hit',
+      stagesMs: { caching: 15, preparing: 10 },
+    });
+  });
 });

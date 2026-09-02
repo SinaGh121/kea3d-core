@@ -18,6 +18,7 @@ export interface MaterialEditState {
 export interface LoadProgress {
   stage: 'reading' | 'resolving' | 'caching' | 'decoding' | 'preparing';
   value?: number;
+  cadCache?: 'hit' | 'miss';
 }
 
 export interface RendererInfoSnapshot {

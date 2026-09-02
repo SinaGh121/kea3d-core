@@ -10,6 +10,7 @@ export interface LoadMetric {
   status: LoadMetricStatus;
   totalMs: number;
   stagesMs: Partial<Record<LoadProgress['stage'], number>>;
+  cadCache?: 'hit' | 'miss';
   model?: Pick<ModelInfo, 'meshes' | 'vertices' | 'triangles' | 'materials'>;
   renderer?: RendererInfoSnapshot;
 }
@@ -30,6 +31,7 @@ export function createLoadMetricTracker(
   const stagesMs: LoadMetric['stagesMs'] = {};
   let activeStage: LoadProgress['stage'] | null = null;
   let stageStartedAt = startedAt;
+  let cadCache: LoadMetric['cadCache'];
   let finished = false;
 
   const closeActiveStage = (endedAt: number) => {
@@ -39,7 +41,9 @@ export function createLoadMetricTracker(
 
   return {
     update(progress: LoadProgress): void {
-      if (finished || progress.stage === activeStage) return;
+      if (finished) return;
+      if (progress.cadCache) cadCache = progress.cadCache;
+      if (progress.stage === activeStage) return;
       const changedAt = now();
       closeActiveStage(changedAt);
       activeStage = progress.stage;
@@ -56,6 +60,7 @@ export function createLoadMetricTracker(
         status,
         totalMs: Math.max(0, finishedAt - startedAt),
         stagesMs,
+        ...(cadCache ? { cadCache } : {}),
         ...(model ? {
           model: {
             meshes: model.meshes,

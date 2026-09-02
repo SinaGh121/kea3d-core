@@ -193,9 +193,11 @@ export async function loadModelFiles(
     const cacheKey = await createCadCacheKey(buffer, format, signal);
     throwIfLoadCancelled(signal);
     const cachedResult = cacheKey ? await readCadCache(cacheKey) : null;
+    onProgress({ stage: 'caching', cadCache: cachedResult ? 'hit' : 'miss' });
     throwIfLoadCancelled(signal);
     let result = cachedResult;
     if (!result) {
+      onProgress({ stage: 'decoding' });
       const parsed = await parseCadInWorker(buffer, format, signal);
       try {
         result = sanitizeCadImportResult(parsed);
