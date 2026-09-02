@@ -170,6 +170,7 @@ export class Viewer {
     preset: 'neutral', exposure: 1, environmentIntensity: 1, backgroundVisible: false, shadows: false,
   };
   private currentModel: Object3D | null = null;
+  private progressivePreview: { scene: Object3D; container: Group } | null = null;
   private currentAnimations: AnimationClip[] = [];
   private animationMixer: AnimationMixer | null = null;
   private animationAction: AnimationAction | null = null;
@@ -319,19 +320,22 @@ export class Viewer {
   ): Promise<LoadedModel> {
     const loaded = await loadModelFiles(files, onProgress, this.renderer, signal);
     const { scene, animations, mainFile, totalSize, sourceUnit, upAxis } = loaded;
+    const isProgressivePreview = this.progressivePreview?.scene === scene;
+    let anchors: ComponentAnchor[];
     try {
       throwIfLoadCancelled(signal);
       validateImportedScene(scene);
+      // A resolved assembly may contain reusable instances of one component, so
+      // the same resource-local Anchor ID can legitimately appear more than once.
+      anchors = discoverComponentAnchorDetails(scene, mainFile.name, { allowDuplicateIds: true });
     } catch (error) {
-      disposeObject3D(scene);
+      if (isProgressivePreview) this.discardProgressivePreview(scene);
+      else disposeObject3D(scene);
       throw error;
     }
     onProgress({ stage: 'preparing' });
 
-    // A resolved assembly may contain reusable instances of one component, so
-    // the same resource-local Anchor ID can legitimately appear more than once.
-    const anchors = discoverComponentAnchorDetails(scene, mainFile.name, { allowDuplicateIds: true });
-
+    if (isProgressivePreview) this.releaseProgressivePreview(scene);
     this.clearModel();
     this.currentModel = scene;
     this.currentAnimations = animations;
@@ -373,6 +377,48 @@ export class Viewer {
       anchors: this.currentAnchors.map((anchor) => this.anchorInfo(anchor)),
       project: loaded.project,
     };
+  }
+
+  showProgressivePreview(scene: Object3D, sourceUnit: LinearUnit, upAxis: UpAxis): void {
+    if (this.disposed || this.progressivePreview?.scene === scene) return;
+    this.discardProgressivePreview();
+    const container = new Group();
+    container.name = `${scene.name || 'CAD model'} preview`;
+    container.scale.setScalar(unitToMeters[sourceUnit]);
+    container.quaternion.copy(orientationCorrection(upAxis, defaultForwardAxis(upAxis)));
+    container.add(scene);
+    this.progressivePreview = { scene, container };
+    if (this.currentModel) this.currentModel.visible = false;
+    this.modelRoot.add(container);
+    this.orientationGizmo.setVisible(true);
+    this.frameDirection(viewDirections.iso, container);
+    this.invalidate();
+  }
+
+  updateProgressivePreview(scene: Object3D): void {
+    if (this.progressivePreview?.scene !== scene) return;
+    this.invalidate();
+  }
+
+  discardProgressivePreview(scene?: Object3D): void {
+    const preview = this.progressivePreview;
+    if (!preview || (scene && preview.scene !== scene)) return;
+    preview.container.remove(preview.scene);
+    this.modelRoot.remove(preview.container);
+    disposeObject3D(preview.scene);
+    this.progressivePreview = null;
+    if (this.currentModel) this.currentModel.visible = true;
+    this.orientationGizmo.setVisible(this.currentModel !== null);
+    this.invalidate();
+  }
+
+  private releaseProgressivePreview(scene: Object3D): void {
+    const preview = this.progressivePreview;
+    if (!preview || preview.scene !== scene) return;
+    preview.container.remove(scene);
+    this.modelRoot.remove(preview.container);
+    this.progressivePreview = null;
+    if (this.currentModel) this.currentModel.visible = true;
   }
 
   setAnchorsVisible(visible: boolean): void {
@@ -1142,6 +1188,7 @@ export class Viewer {
     this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.renderer.domElement.removeEventListener('pointercancel', this.handlePointerCancel);
+    this.discardProgressivePreview();
     this.clearModel();
     if (this.cameraChangeTimer !== null) window.clearTimeout(this.cameraChangeTimer);
     this.orbitControls.removeEventListener('change', this.handleCameraChange);

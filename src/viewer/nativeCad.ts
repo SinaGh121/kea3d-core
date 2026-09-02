@@ -2,7 +2,14 @@ import { BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, MeshSt
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { loadCancelledError, throwIfLoadCancelled } from './loadControl';
 import { registerPreparedModel } from './preparedModel';
+import { disposeObject3D } from './disposeObject';
 import type { LoadProgress } from './types';
+
+export interface NativeCadProgressiveHandlers {
+  onFirstBatch?: (scene: Group) => void;
+  onBatch?: (scene: Group) => void;
+  onDiscard?: (scene: Group) => void;
+}
 
 type NativeBytes = ArrayBuffer | Uint8Array | number[];
 type NativeCadHeader = {
@@ -102,6 +109,7 @@ export async function importNativeCadFile(
   sourceSize: number,
   onProgress: (progress: LoadProgress) => void,
   signal?: AbortSignal,
+  progressive?: NativeCadProgressiveHandlers,
 ): Promise<{ file: File; warning: string | null }> {
   throwIfLoadCancelled(signal);
   const sessionId = crypto.randomUUID();
@@ -123,6 +131,8 @@ export async function importNativeCadFile(
         manifestSeen = true;
       } else if (header.type === 'meshBatch') {
         root.add(meshFromBatch(header, payload));
+        if (root.children.length === 1) progressive?.onFirstBatch?.(root);
+        progressive?.onBatch?.(root);
       } else if (header.type === 'progress') {
         const total = header.total ?? 0;
         onProgress({ stage: 'decoding', value: total > 0 ? (header.completed ?? 0) / total : undefined });
@@ -138,6 +148,7 @@ export async function importNativeCadFile(
 
   const abort = () => { void invoke('cancel_native_cad_import', { sessionId }).catch(() => undefined); };
   signal?.addEventListener('abort', abort, { once: true });
+  let completed = false;
   try {
     await invoke('import_pending_native_cad', { id: pendingId, sessionId, events });
     throwIfLoadCancelled(signal);
@@ -154,8 +165,13 @@ export async function importNativeCadFile(
       sourceUnit: 'mm',
       upAxis: 'z',
     });
+    completed = true;
     return { file, warning: terminalMessage?.trim() || null };
   } finally {
     signal?.removeEventListener('abort', abort);
+    if (!completed) {
+      if (progressive?.onDiscard) progressive.onDiscard(root);
+      else disposeObject3D(root);
+    }
   }
 }

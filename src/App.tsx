@@ -650,6 +650,7 @@ export default function App() {
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
   const [loadingName, setLoadingName] = useState<string | null>(null);
   const [progress, setProgress] = useState<LoadProgress | null>(null);
+  const [progressiveCadVisible, setProgressiveCadVisible] = useState(false);
   const [loadingBytes, setLoadingBytes] = useState(0);
   const [nativeStartupResolved, setNativeStartupResolved] = useState(!nativeShell);
   const [readingNativeFile, setReadingNativeFile] = useState(false);
@@ -941,6 +942,7 @@ export default function App() {
     const viewerPromise = viewerPromiseRef.current;
     if (!viewerPromise || files.length === 0) return;
     loadAbortRef.current?.abort();
+    setProgressiveCadVisible(false);
     setProjectRecovery(null);
     const controller = new AbortController();
     loadAbortRef.current = controller;
@@ -1081,6 +1083,9 @@ export default function App() {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
           const nativeCadEntry = pending.length === 1 && pending[0]?.nativeCadAvailable ? pending[0] : null;
           if (nativeCadEntry) {
+            const viewerPromise = viewerPromiseRef.current;
+            if (!viewerPromise) throw new Error('The 3D viewer is not ready yet.');
+            const viewer = viewerRef.current ?? await viewerPromise;
             loadAbortRef.current?.abort();
             const nativeController = new AbortController();
             loadAbortRef.current = nativeController;
@@ -1096,13 +1101,25 @@ export default function App() {
                   if (loadAbortRef.current === nativeController) setProgress(nextProgress);
                 },
                 nativeController.signal,
+                {
+                  onFirstBatch: (scene) => {
+                    viewer.showProgressivePreview(scene, 'mm', 'z');
+                    setProgressiveCadVisible(true);
+                  },
+                  onBatch: (scene) => viewer.updateProgressivePreview(scene),
+                  onDiscard: (scene) => viewer.discardProgressivePreview(scene),
+                },
               );
-              if (nativeController.signal.aborted) return;
+              if (nativeController.signal.aborted) {
+                viewer.discardProgressivePreview();
+                return;
+              }
               if (loadAbortRef.current === nativeController) loadAbortRef.current = null;
               await loadFiles([nativeImport.file]);
               if (nativeImport.warning) toast.warning(nativeImport.warning);
               return;
             } finally {
+              setProgressiveCadVisible(false);
               if (loadAbortRef.current === nativeController) loadAbortRef.current = null;
             }
           }
@@ -2927,8 +2944,16 @@ export default function App() {
           )}
 
           {(progress || !nativeStartupResolved) && (
-            <div className="absolute inset-0 z-50 grid place-items-center bg-background/40 backdrop-blur-[3px]" role="status" aria-live="polite">
-              <Card className="w-[min(370px,calc(100%_-_40px))] gap-3 p-4 shadow-2xl">
+            <div className={cn(
+              'absolute inset-0 z-50 grid',
+              progressiveCadVisible
+                ? 'pointer-events-none place-items-end p-3 sm:p-4'
+                : 'place-items-center bg-background/40 backdrop-blur-[3px]',
+            )} role="status" aria-live="polite">
+              <Card className={cn(
+                'w-[min(370px,calc(100%_-_40px))] gap-3 p-4 shadow-2xl',
+                progressiveCadVisible && 'pointer-events-auto bg-background/92 backdrop-blur-md',
+              )}>
                 <div className="flex items-center gap-3">
                   <div className="size-8 animate-spin rounded-full border border-border border-t-primary" />
                   <div className="min-w-0">
