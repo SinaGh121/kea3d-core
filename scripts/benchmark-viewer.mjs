@@ -1,11 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright';
 
 function parseArguments(arguments_) {
-  const options = { files: [], repeat: 3, output: '', port: 4174, cacheMode: 'isolated', timeoutMs: 300_000 };
+  const options = { files: [], repeat: 3, output: '', port: 4174, cacheMode: 'isolated', timeoutMs: 300_000, verifyCacheInvalidation: false };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     const value = arguments_[index + 1];
@@ -15,6 +15,7 @@ function parseArguments(arguments_) {
     else if (argument === '--port' && value) { options.port = Number.parseInt(value, 10); index += 1; }
     else if (argument === '--cache-mode' && value) { options.cacheMode = value; index += 1; }
     else if (argument === '--timeout-ms' && value) { options.timeoutMs = Number.parseInt(value, 10); index += 1; }
+    else if (argument === '--verify-cache-invalidation') options.verifyCacheInvalidation = true;
     else throw new Error(`Unknown or incomplete argument: ${argument}`);
   }
   if (options.files.length === 0) options.files.push(resolve('tests/fixtures/AnimatedMorphCube.glb'));
@@ -22,6 +23,7 @@ function parseArguments(arguments_) {
   if (!Number.isInteger(options.port) || options.port < 1024 || options.port > 65535) throw new Error('--port must be between 1024 and 65535.');
   if (!['isolated', 'cold-warm'].includes(options.cacheMode)) throw new Error('--cache-mode must be isolated or cold-warm.');
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1_000) throw new Error('--timeout-ms must be at least 1000.');
+  if (options.verifyCacheInvalidation && options.cacheMode !== 'cold-warm') throw new Error('--verify-cache-invalidation requires --cache-mode cold-warm.');
   return options;
 }
 
@@ -90,6 +92,19 @@ function isCadFile(file) {
   return /\.(?:step|stp|iges|igs|brep)$/i.test(file);
 }
 
+function fileLabel(file) {
+  return typeof file === 'string' ? basename(file) : file.name;
+}
+
+async function createDigestVariant(file) {
+  const source = await readFile(file);
+  return {
+    name: basename(file),
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.concat([source, Buffer.from('\n')]),
+  };
+}
+
 async function waitForLoadMetric(page, file, timeoutMs) {
   const metricPromise = page.evaluate(() => new Promise((resolveMetric) => {
     globalThis.addEventListener('kea3d:load-metric', (event) => resolveMetric(event.detail), { once: true });
@@ -100,7 +115,7 @@ async function waitForLoadMetric(page, file, timeoutMs) {
     return await Promise.race([
       metricPromise,
       new Promise((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`${basename(file)} exceeded the ${timeoutMs} ms benchmark timeout.`)), timeoutMs);
+        timeout = setTimeout(() => reject(new Error(`${fileLabel(file)} exceeded the ${timeoutMs} ms benchmark timeout.`)), timeoutMs);
       }),
     ]);
   } finally {
@@ -108,8 +123,8 @@ async function waitForLoadMetric(page, file, timeoutMs) {
   }
 }
 
-async function waitForCadCache(page, timeoutMs) {
-  await page.evaluate(async ({ timeout }) => {
+async function waitForCadCache(page, minimumEntries, timeoutMs) {
+  return await page.evaluate(async ({ minimum, timeout }) => {
     const deadline = Date.now() + timeout;
     const recordCount = () => new Promise((resolveCount) => {
       const request = globalThis.indexedDB.open('kea3d-cad-cache', 1);
@@ -123,11 +138,12 @@ async function waitForCadCache(page, timeoutMs) {
       };
     });
     while (Date.now() < deadline) {
-      if (await recordCount() > 0) return;
+      const count = await recordCount();
+      if (count >= minimum) return count;
       await new Promise((resolveWait) => setTimeout(resolveWait, 100));
     }
     throw new Error('Timed out waiting for the CAD cache write to finish.');
-  }, { timeout: timeoutMs });
+  }, { minimum: minimumEntries, timeout: timeoutMs });
 }
 
 async function runPage(context, file, iteration, cacheState, timeoutMs) {
@@ -149,7 +165,7 @@ async function runPage(context, file, iteration, cacheState, timeoutMs) {
     }
     const indexedDbBytes = storage.usageBreakdown.find((entry) => entry.storageType === 'indexeddb')?.usage ?? 0;
     const run = {
-      file: basename(file),
+      file: fileLabel(file),
       iteration,
       cacheState,
       load,
@@ -163,7 +179,7 @@ async function runPage(context, file, iteration, cacheState, timeoutMs) {
       },
       errors,
     };
-    if (load.status !== 'success' || errors.length > 0) throw new Error(`${basename(file)} benchmark run ${iteration} (${cacheState}) failed.`);
+    if (load.status !== 'success' || errors.length > 0) throw new Error(`${fileLabel(file)} benchmark run ${iteration} (${cacheState}) failed.`);
     return { page, run };
   } catch (error) {
     await page.close();
@@ -184,20 +200,38 @@ try {
   await waitForServer(baseUrl);
   browser = await chromium.launch({ headless: true, args: ['--enable-precise-memory-info'] });
   const runs = [];
+  const cacheInvalidations = [];
   for (const file of options.files) {
+    const digestVariant = options.verifyCacheInvalidation && isCadFile(file) ? await createDigestVariant(file) : null;
     for (let iteration = 1; iteration <= options.repeat; iteration += 1) {
       const context = await browser.newContext({ serviceWorkers: 'block' });
       try {
         if (options.cacheMode === 'cold-warm' && isCadFile(file)) {
           const cold = await runPage(context, file, iteration, 'cold', options.timeoutMs);
           runs.push(cold.run);
-          await waitForCadCache(cold.page, options.timeoutMs);
+          const entriesAfterOriginal = await waitForCadCache(cold.page, 1, options.timeoutMs);
           await cold.page.close();
           const warm = await runPage(context, file, iteration, 'warm', options.timeoutMs);
           runs.push(warm.run);
           await warm.page.close();
           if (cold.run.load.cadCache !== 'miss' || warm.run.load.cadCache !== 'hit') {
             throw new Error(`${basename(file)} did not produce the expected cold-miss/warm-hit cache sequence.`);
+          }
+          if (digestVariant) {
+            const invalidated = await runPage(context, digestVariant, iteration, 'changed-source', options.timeoutMs);
+            runs.push(invalidated.run);
+            const entriesAfterChangedSource = await waitForCadCache(invalidated.page, 2, options.timeoutMs);
+            await invalidated.page.close();
+            if (invalidated.run.load.cadCache !== 'miss') {
+              throw new Error(`${basename(file)} changed-source probe reused a stale CAD cache entry.`);
+            }
+            cacheInvalidations.push({
+              file: basename(file),
+              iteration,
+              outcome: 'pass',
+              entriesAfterOriginal,
+              entriesAfterChangedSource,
+            });
           }
         } else {
           const isolated = await runPage(context, file, iteration, 'isolated', options.timeoutMs);
@@ -219,8 +253,10 @@ try {
     platform: { os: process.platform, arch: process.arch, node: process.version, browser: browser.version() },
     repeat: options.repeat,
     cacheMode: options.cacheMode,
+    verifyCacheInvalidation: options.verifyCacheInvalidation,
     summaries,
     cadCacheComparisons: compareCadCache(summaries),
+    cacheInvalidations,
     runs,
   };
   const defaultName = `viewer-${report.createdAt.replaceAll(':', '-').replaceAll('.', '-')}.json`;
@@ -233,6 +269,9 @@ try {
   }
   for (const comparison of report.cadCacheComparisons) {
     console.log(`${comparison.file} warm-cache speedup: ${comparison.speedup.toFixed(2)}x (${comparison.reductionPercent.toFixed(1)}% less time)`);
+  }
+  for (const invalidation of report.cacheInvalidations) {
+    console.log(`${invalidation.file} source-digest invalidation: ${invalidation.outcome} (${invalidation.entriesAfterOriginal} -> ${invalidation.entriesAfterChangedSource} entries)`);
   }
 } finally {
   if (browser) await browser.close();

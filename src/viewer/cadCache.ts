@@ -7,8 +7,8 @@ export const cadCacheNamespace = `kea3d-cad-${cadCacheSchemaVersion}-occt-0.0.23
 
 const databaseName = 'kea3d-cad-cache';
 const storeName = 'tessellations';
-const maxEntries = 10;
-const maxTrackedSourceBytes = 600 * 1024 * 1024;
+export const cadCacheMaxEntries = 10;
+export const cadCacheMaxTrackedSourceBytes = 600 * 1024 * 1024;
 
 type CadFormat = 'step' | 'iges' | 'brep';
 
@@ -20,9 +20,24 @@ interface CadCacheRecord {
   lastAccessedAt: number;
 }
 
+type CadCacheRecordMetadata = Pick<CadCacheRecord, 'key' | 'sourceBytes' | 'lastAccessedAt'>;
+
 export interface CadCacheStats {
   entries: number;
   sourceBytes: number;
+}
+
+export function cadCacheKeysToEvict(records: readonly CadCacheRecordMetadata[]): string[] {
+  let totalBytes = records.reduce((total, record) => total + Math.max(record.sourceBytes, 0), 0);
+  const remaining = [...records].sort((left, right) => left.lastAccessedAt - right.lastAccessedAt);
+  const keys: string[] = [];
+  while (remaining.length > cadCacheMaxEntries || totalBytes > cadCacheMaxTrackedSourceBytes) {
+    const oldest = remaining.shift();
+    if (!oldest) break;
+    keys.push(oldest.key);
+    totalBytes -= Math.max(oldest.sourceBytes, 0);
+  }
+  return keys;
 }
 
 function openDatabase(): Promise<IDBDatabase | null> {
@@ -126,14 +141,7 @@ export async function writeCadCache(key: string, result: CadImportResult, source
     store.put({ key, result, sourceBytes, createdAt: now, lastAccessedAt: now } satisfies CadCacheRecord);
     const records = await requestValue(store.getAll() as IDBRequest<CadCacheRecord[]>);
     if (records) {
-      let totalBytes = records.reduce((total, record) => total + Math.max(record.sourceBytes, 0), 0);
-      const oldestFirst = [...records].sort((left, right) => left.lastAccessedAt - right.lastAccessedAt);
-      while (oldestFirst.length > maxEntries || totalBytes > maxTrackedSourceBytes) {
-        const oldest = oldestFirst.shift();
-        if (!oldest) break;
-        store.delete(oldest.key);
-        totalBytes -= Math.max(oldest.sourceBytes, 0);
-      }
+      cadCacheKeysToEvict(records).forEach((recordKey) => store.delete(recordKey));
     }
     return await transactionDone(transaction);
   } catch {
