@@ -1,7 +1,7 @@
 {
   "name": "kea3d",
   "private": true,
-  "version": "0.1.78",
+  "version": "0.1.79",
   "type": "module",
   "scripts": {
     "sync:decoders": "node scripts/sync-three-decoders.mjs",
@@ -25,6 +25,7 @@
     "smoke:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/test-windows-package.ps1",
     "prebenchmark:viewer": "npm run build",
     "benchmark:viewer": "node scripts/benchmark-viewer.mjs",
+    "benchmark:native-cad": "node scripts/benchmark-native-cad.mjs",
     "version:check": "node scripts/product-version.mjs check",
     "version:set": "node scripts/product-version.mjs set",
     "lint": "eslint .",

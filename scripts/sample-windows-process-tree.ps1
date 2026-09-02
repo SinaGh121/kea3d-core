@@ -24,6 +24,9 @@ $gpuCountersAvailable = $true
 $gpuCounterMatches = 0
 
 function Get-ProcessTreeSnapshot {
+  # Capture the root before the slower CIM traversal so short-lived workers still
+  # contribute at least one real memory sample.
+  $rootProcess = Get-Process -Id $RootProcessId -ErrorAction SilentlyContinue
   $rows = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CommandLine -ErrorAction SilentlyContinue)
   $ids = [System.Collections.Generic.HashSet[int]]::new()
   [void]$ids.Add($RootProcessId)
@@ -49,7 +52,11 @@ function Get-ProcessTreeSnapshot {
   $rendererWorkingSetBytes = 0L
   $gpuProcessWorkingSetBytes = 0L
   foreach ($processId in $ids) {
-    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    $process = if ($processId -eq $RootProcessId -and $rootProcess) {
+      $rootProcess
+    } else {
+      Get-Process -Id $processId -ErrorAction SilentlyContinue
+    }
     if (-not $process) { continue }
     $workingSetBytes += [long]$process.WorkingSet64
     $privateBytes += [long]$process.PrivateMemorySize64

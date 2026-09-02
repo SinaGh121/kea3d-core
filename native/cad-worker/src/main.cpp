@@ -590,13 +590,6 @@ int wmain(const int argc, wchar_t** argv) {
 
     std::vector<kea3d::CadThumbnailTriangle> thumbnail_triangles;
     thumbnail_triangles.reserve(std::min<std::size_t>(max_thumbnail_triangles, 250'000));
-    try {
-      BRepMesh_IncrementalMesh mesher(shapes->GetShape(root), 0.1, Standard_False, 0.5,
-                                     Standard_True);
-      mesher.Perform();
-    } catch (const Standard_Failure&) {
-      // Individual-shell fallback below preserves usable geometry from imperfect assemblies.
-    }
     std::size_t emitted_shells = 0;
     std::size_t skipped_shells = 0;
     for (std::size_t index = 0; index < shells.size(); ++index) {
