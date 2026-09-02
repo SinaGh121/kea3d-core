@@ -20,6 +20,14 @@ export interface LoadProgress {
   value?: number;
 }
 
+export interface RendererInfoSnapshot {
+  geometries: number;
+  textures: number;
+  programs: number;
+  drawCalls: number;
+  triangles: number;
+}
+
 export interface ModelInfo {
   fileName: string;
   fileSize: number;

@@ -28,9 +28,10 @@ import { clearCadCache, getCadCacheStats } from '@/viewer/cadCache';
 import { decodeSharedView, encodeSharedView } from '@/viewer/sharedView';
 import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, materialCategoryNames, materialPresets, type MaterialFinish, type MaterialPresetOptions, type MaterialTone } from '@/viewer/materialPresets';
 import { isNativeShell } from '@/nativeShell';
-import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
+import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
 import type { Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
 import type { AnchorEditInput } from '@/project/componentAnchors';
+import { createLoadMetricTracker, type LoadMetricStatus } from '@/performance/loadMetrics';
 
 const acceptedExtensions = ['.kea3dp', '.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
 const legalDocuments = {
@@ -943,16 +944,26 @@ export default function App() {
     setProjectRecovery(null);
     const controller = new AbortController();
     loadAbortRef.current = controller;
-    setLoadingName(files.find((file) => /\.(kea3dp|kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model');
-    setLoadingBytes(files.reduce((total, file) => total + file.size, 0));
-    setProgress({ stage: 'preparing', value: 0.05 });
+    const loadingFileName = files.find((file) => /\.(kea3dp|kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep|blend)$/i.test(file.name))?.name ?? 'Local model';
+    const loadingFileBytes = files.reduce((total, file) => total + file.size, 0);
+    const metricTracker = createLoadMetricTracker(loadingFileName, loadingFileBytes);
+    let metricStatus: LoadMetricStatus = 'cancelled';
+    let metricModel: ModelInfo | undefined;
+    let metricRenderer: RendererInfoSnapshot | undefined;
+    const reportProgress = (nextProgress: LoadProgress) => {
+      metricTracker.update(nextProgress);
+      setProgress(nextProgress);
+    };
+    setLoadingName(loadingFileName);
+    setLoadingBytes(loadingFileBytes);
+    reportProgress({ stage: 'preparing', value: 0.05 });
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try {
       const viewer = viewerRef.current ?? await viewerPromise;
       if (controller.signal.aborted || loadAbortRef.current !== controller) return;
-      setProgress({ stage: 'reading', value: 0 });
+      reportProgress({ stage: 'reading', value: 0 });
       const loaded = await viewer.loadFiles(files, (nextProgress) => {
-        if (loadAbortRef.current === controller) setProgress(nextProgress);
+        if (loadAbortRef.current === controller) reportProgress(nextProgress);
       }, controller.signal);
       if (controller.signal.aborted || loadAbortRef.current !== controller) return;
       const sharedView = pendingSharedViewRef.current;
@@ -1023,7 +1034,13 @@ export default function App() {
       setMeasurement({ pointCount: 0, distance: null });
       setMeasurementCopied(false);
       setProjectRecovery(null);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (controller.signal.aborted || loadAbortRef.current !== controller) return;
+      metricStatus = 'success';
+      metricModel = loaded.info;
+      metricRenderer = viewer.getRendererInfo();
     } catch (loadError) {
+      metricStatus = isLoadCancellation(loadError) ? 'cancelled' : 'failure';
       if (!isLoadCancellation(loadError) && loadAbortRef.current === controller) {
         if (isProjectResourceRecoveryError(loadError)) {
           setProjectRecovery({ files, issues: loadError.issues });
@@ -1033,6 +1050,7 @@ export default function App() {
         }
       }
     } finally {
+      metricTracker.finish(metricStatus, metricModel, metricRenderer);
       if (loadAbortRef.current === controller) {
         loadAbortRef.current = null;
         setProgress(null);

@@ -1,7 +1,7 @@
 {
   "name": "kea3d",
   "private": true,
-  "version": "0.1.74",
+  "version": "0.1.75",
   "type": "module",
   "scripts": {
     "sync:decoders": "node scripts/sync-three-decoders.mjs",
@@ -22,6 +22,9 @@
     "mobile:android:package": "powershell -ExecutionPolicy Bypass -File ./scripts/build-android.ps1",
     "mobile:ios:init": "tauri ios init",
     "mobile:ios:dev": "tauri ios dev",
+    "smoke:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/test-windows-package.ps1",
+    "prebenchmark:viewer": "npm run build",
+    "benchmark:viewer": "node scripts/benchmark-viewer.mjs",
     "version:check": "node scripts/product-version.mjs check",
     "version:set": "node scripts/product-version.mjs set",
     "lint": "eslint .",

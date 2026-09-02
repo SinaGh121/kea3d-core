@@ -58,7 +58,7 @@ import { validateImportedScene } from './validateImportedScene';
 import { defaultMaterialPresetOptions, findMaterialPreset, type MaterialPreset, type MaterialPresetOptions } from './materialPresets';
 import { CommandHistory, type ReversibleCommand } from '../commandHistory';
 import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, validateAnchorEditInput, type AnchorEditInput, type ComponentAnchor } from '@/project/componentAnchors';
-import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
+import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
 
 const viewDirections: Record<CameraView, Vector3> = {
   // Canonical Kea3D preview direction. Keep the native thumbnail-provider basis
@@ -379,6 +379,16 @@ export class Viewer {
     this.anchorsVisible = visible;
     this.anchorGroup.visible = visible && this.currentAnchors.length > 0;
     this.invalidate();
+  }
+
+  getRendererInfo(): RendererInfoSnapshot {
+    return {
+      geometries: this.renderer.info.memory.geometries,
+      textures: this.renderer.info.memory.textures,
+      programs: this.renderer.info.programs?.length ?? 0,
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+    };
   }
 
   getSceneDocumentState(): { sceneTree: SceneNode[]; anchors: AnchorInfo[] } {
