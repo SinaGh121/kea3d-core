@@ -27,6 +27,8 @@ function parseOptions(arguments_) {
     maxTotalSeconds: null,
     expectedBatches: null,
     expectedTriangles: null,
+    expectedColoredFaces: null,
+    minimumDistinctColors: null,
   };
   for (let index = 0; index < arguments_.length; index += 1) {
     const option = arguments_[index];
@@ -50,6 +52,10 @@ function parseOptions(arguments_) {
       options.expectedBatches = parsePositiveNumber(value, option); index += 1;
     } else if (option === '--expected-triangles') {
       options.expectedTriangles = parsePositiveNumber(value, option); index += 1;
+    } else if (option === '--expected-colored-faces') {
+      options.expectedColoredFaces = parsePositiveNumber(value, option); index += 1;
+    } else if (option === '--minimum-distinct-colors') {
+      options.minimumDistinctColors = parsePositiveNumber(value, option); index += 1;
     }
     else throw new Error(`Unknown or incomplete option: ${option}`);
   }
@@ -165,6 +171,8 @@ async function readWorkerStream(stream, sessionId, startedAt) {
     frames: 0,
     manifests: 0,
     batches: 0,
+    colorGroups: 0,
+    distinctColors: [],
     faces: 0,
     coloredFaces: 0,
     vertices: 0,
@@ -177,6 +185,7 @@ async function readWorkerStream(stream, sessionId, startedAt) {
     firstBatchAfterManifestSeconds: null,
     terminal: null,
   };
+  const distinctColors = new Set();
   let expectedSequence = 1;
   let transferStartedAt = null;
   while (true) {
@@ -211,8 +220,21 @@ async function readWorkerStream(stream, sessionId, startedAt) {
       if (vertices !== header.vertexCount || triangles !== header.triangleCount || expectedLength !== payloadLength) {
         throw new Error('Native CAD mesh payload counts do not match its frame.');
       }
-      await reader.discardExact(payloadLength - 16);
+      await reader.discardExact(vertices * 24 + triangles * 12);
+      const groupBytes = await reader.readExact(groups * 24);
+      for (let group = 0; group < groups; group += 1) {
+        const offset = group * 24;
+        const firstTriangle = groupBytes.readUInt32LE(offset);
+        const triangleCount = groupBytes.readUInt32LE(offset + 4);
+        if (triangleCount === 0 || firstTriangle + triangleCount > triangles) {
+          throw new Error('Native CAD color group exceeds its mesh triangle range.');
+        }
+        const color = [8, 12, 16, 20].map((channel) => groupBytes.readFloatLE(offset + channel));
+        if (!color.every(Number.isFinite)) throw new Error('Native CAD color group contains a non-finite value.');
+        distinctColors.add(color.map((channel) => channel.toFixed(6)).join(','));
+      }
       metrics.batches += 1;
+      metrics.colorGroups += groups;
       metrics.faces += header.faceCount;
       metrics.coloredFaces += header.coloredFaceCount;
       metrics.vertices += vertices;
@@ -237,6 +259,7 @@ async function readWorkerStream(stream, sessionId, startedAt) {
     }
   }
   if (metrics.manifests !== 1 || !metrics.terminal) throw new Error('Native CAD stream ended without one manifest and a terminal event.');
+  metrics.distinctColors = [...distinctColors].sort();
   return metrics;
 }
 
@@ -319,9 +342,11 @@ async function main() {
     if (options.maxTotalSeconds && run.timing.totalSeconds > options.maxTotalSeconds) violations.push(`${run.file}: ${run.timing.totalSeconds}s exceeds time limit ${options.maxTotalSeconds}s`);
     if (options.expectedBatches && run.timing.batches !== options.expectedBatches) violations.push(`${run.file}: expected ${options.expectedBatches} batches, received ${run.timing.batches}`);
     if (options.expectedTriangles && run.timing.triangles !== options.expectedTriangles) violations.push(`${run.file}: expected ${options.expectedTriangles} triangles, received ${run.timing.triangles}`);
+    if (options.expectedColoredFaces && run.timing.coloredFaces !== options.expectedColoredFaces) violations.push(`${run.file}: expected ${options.expectedColoredFaces} colored faces, received ${run.timing.coloredFaces}`);
+    if (options.minimumDistinctColors && run.timing.distinctColors.length < options.minimumDistinctColors) violations.push(`${run.file}: expected at least ${options.minimumDistinctColors} distinct colors, received ${run.timing.distinctColors.length}`);
   }
   const report = {
-    schema: 'kea3d-native-cad-benchmark-v1',
+    schema: 'kea3d-native-cad-benchmark-v2',
     generatedAt: new Date().toISOString(),
     platform: { platform: process.platform, architecture: process.arch, node: process.version },
     worker: basename(options.worker),
@@ -332,6 +357,8 @@ async function main() {
       totalSeconds: options.maxTotalSeconds,
       expectedBatches: options.expectedBatches,
       expectedTriangles: options.expectedTriangles,
+      expectedColoredFaces: options.expectedColoredFaces,
+      minimumDistinctColors: options.minimumDistinctColors,
     },
     summary,
     violations,

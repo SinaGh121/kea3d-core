@@ -18,10 +18,13 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <XCAFApp_Application.hxx>
 #include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFPrs.hxx>
+#include <XCAFPrs_IndexedDataMapOfShapeStyle.hxx>
 
 #include "thumbnail_renderer.h"
 
@@ -43,6 +46,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <fcntl.h>
@@ -77,6 +81,15 @@ struct MeshBatch {
   std::uint64_t face_count = 0;
   std::uint64_t colored_face_count = 0;
 };
+
+struct ResolvedFaceColor {
+  std::array<float, 4> value{};
+  int specificity = 0;
+};
+
+using ResolvedFaceColors =
+  std::unordered_map<TopoDS_Shape, ResolvedFaceColor, TopTools_ShapeMapHasher,
+                     TopTools_ShapeMapHasher>;
 
 std::uint64_t thumbnail_hash(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary);
@@ -276,20 +289,61 @@ bool same_color(const std::array<float, 4>& left, const std::array<float, 4>& ri
   });
 }
 
-bool face_color(const Handle(XCAFDoc_ColorTool)& colors, const TDF_Label& root,
-                const Handle(XCAFDoc_ShapeTool)& shapes, const TopoDS_Face& face,
+int color_specificity(const TopAbs_ShapeEnum type) {
+  switch (type) {
+    case TopAbs_FACE: return 0;
+    case TopAbs_SHELL: return 1;
+    case TopAbs_SOLID: return 2;
+    case TopAbs_COMPSOLID: return 3;
+    case TopAbs_COMPOUND: return 4;
+    default: return 5;
+  }
+}
+
+void assign_face_color(ResolvedFaceColors& resolved, const TopoDS_Shape& face,
+                       const std::array<float, 4>& color, const int specificity) {
+  const auto existing = resolved.find(face);
+  if (existing == resolved.end()) {
+    resolved.emplace(face, ResolvedFaceColor{color, specificity});
+  } else if (specificity <= existing->second.specificity) {
+    existing->second = ResolvedFaceColor{color, specificity};
+  }
+}
+
+ResolvedFaceColors collect_face_colors(const TDF_Label& root) {
+  XCAFPrs_IndexedDataMapOfShapeStyle settings;
+  XCAFPrs::CollectStyleSettings(root, TopLoc_Location(), settings);
+  ResolvedFaceColors resolved;
+  for (XCAFPrs_DataMapIteratorOfIndexedDataMapOfShapeStyle iterator(settings);
+       iterator.More(); iterator.Next()) {
+    const XCAFPrs_Style& style = iterator.Value();
+    if (!style.IsVisible() || !style.IsSetColorSurf()) continue;
+    const Quantity_ColorRGBA& source = style.GetColorSurfRGBA();
+    const Quantity_Color& rgb = source.GetRGB();
+    const std::array<float, 4> color{
+      static_cast<float>(rgb.Red()), static_cast<float>(rgb.Green()),
+      static_cast<float>(rgb.Blue()), static_cast<float>(source.Alpha())};
+    const TopoDS_Shape& styled_shape = iterator.Key();
+    const int specificity = color_specificity(styled_shape.ShapeType());
+    if (styled_shape.ShapeType() == TopAbs_FACE) {
+      assign_face_color(resolved, styled_shape, color, specificity);
+      continue;
+    }
+    for (TopExp_Explorer faces(styled_shape, TopAbs_FACE); faces.More(); faces.Next()) {
+      assign_face_color(resolved, faces.Current(), color, specificity);
+    }
+  }
+  return resolved;
+}
+
+bool face_color(const ResolvedFaceColors& colors, const TopoDS_Face& face,
                 std::array<float, 4>& value) {
-  TDF_Label label;
-  Quantity_Color color;
-  if (!shapes->FindSubShape(root, face, label) ||
-      !(colors->GetColor(label, XCAFDoc_ColorSurf, color) ||
-        colors->GetColor(label, XCAFDoc_ColorGen, color) ||
-        colors->GetColor(label, XCAFDoc_ColorCurv, color))) {
+  const auto found = colors.find(face);
+  if (found == colors.end()) {
     value = {0.72F, 0.76F, 0.82F, 1.0F};
     return false;
   }
-  value = {static_cast<float>(color.Red()), static_cast<float>(color.Green()),
-           static_cast<float>(color.Blue()), 1.0F};
+  value = found->second.value;
   return true;
 }
 
@@ -299,9 +353,8 @@ bool checked_u32(const std::size_t value, std::uint32_t& result) {
   return true;
 }
 
-std::optional<MeshBatch> extract_shell_mesh(const TopoDS_Shape& shell, const TDF_Label& root,
-                                            const Handle(XCAFDoc_ShapeTool)& shapes,
-                                            const Handle(XCAFDoc_ColorTool)& colors) {
+std::optional<MeshBatch> extract_shell_mesh(const TopoDS_Shape& shell,
+                                            const ResolvedFaceColors& colors) {
   MeshBatch batch;
   for (TopExp_Explorer explorer(shell, TopAbs_FACE); explorer.More(); explorer.Next()) {
     if (cancel_requested.load(std::memory_order_relaxed)) return std::nullopt;
@@ -355,7 +408,7 @@ std::optional<MeshBatch> extract_shell_mesh(const TopoDS_Shape& shell, const TDF
     }
 
     std::array<float, 4> color{};
-    if (face_color(colors, root, shapes, face, color)) ++batch.colored_face_count;
+    if (face_color(colors, face, color)) ++batch.colored_face_count;
     const std::uint32_t triangle_count =
       static_cast<std::uint32_t>(batch.indices.size() / 3) - first_triangle;
     if (triangle_count == 0) continue;
@@ -370,13 +423,12 @@ std::optional<MeshBatch> extract_shell_mesh(const TopoDS_Shape& shell, const TDF
   return batch;
 }
 
-std::optional<MeshBatch> tessellate_shell(const TopoDS_Shape& shell, const TDF_Label& root,
-                                          const Handle(XCAFDoc_ShapeTool)& shapes,
-                                          const Handle(XCAFDoc_ColorTool)& colors) {
+std::optional<MeshBatch> tessellate_shell(const TopoDS_Shape& shell,
+                                          const ResolvedFaceColors& colors) {
   BRepMesh_IncrementalMesh mesher(shell, 0.1, Standard_False, 0.5, Standard_True);
   mesher.Perform();
   if (!mesher.IsDone()) return std::nullopt;
-  return extract_shell_mesh(shell, root, shapes, colors);
+  return extract_shell_mesh(shell, colors);
 }
 
 std::vector<std::uint8_t> encode_mesh(const MeshBatch& batch) {
@@ -560,13 +612,13 @@ int wmain(const int argc, wchar_t** argv) {
     write_progress(arguments, sequence, "transferring", 1, 1);
 
     const Handle(XCAFDoc_ShapeTool) shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
-    const Handle(XCAFDoc_ColorTool) colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
     TDF_LabelSequence roots;
     shapes->GetFreeShapes(roots);
     if (roots.Length() != 1) {
       terminal(arguments, sequence, "failure", "The initial worker requires exactly one STEP root.", 1);
     }
     const TDF_Label root = roots.Value(1);
+    const ResolvedFaceColors colors = collect_face_colors(root);
     const std::vector<TopoDS_Shape> shells = collect_shells(shapes->GetShape(root));
     if (shells.empty()) {
       terminal(arguments, sequence, "failure", "The STEP model does not contain tessellatable shells.", 1);
@@ -598,8 +650,8 @@ int wmain(const int argc, wchar_t** argv) {
       }
       std::optional<MeshBatch> batch;
       try {
-        batch = extract_shell_mesh(shells[index], root, shapes, colors);
-        if (!batch) batch = tessellate_shell(shells[index], root, shapes, colors);
+        batch = extract_shell_mesh(shells[index], colors);
+        if (!batch) batch = tessellate_shell(shells[index], colors);
       } catch (const Standard_Failure&) {
         if (cancel_requested.load(std::memory_order_relaxed)) {
           terminal(arguments, sequence, "cancelled", "", 0);
