@@ -1,9 +1,10 @@
 import { Group, type Matrix4, type Object3D } from 'three';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import type { Kea3dProjectDocument } from './projectFormat';
-import { discoverComponentAnchorDetails } from './componentAnchors';
+import { discoverComponentAnchorDetails, promoteLegacyNamedAnchors } from './componentAnchors';
 
 export function discoverComponentAnchors(scene: Object3D, resourceId: string): Map<string, Matrix4> {
+  promoteLegacyNamedAnchors(scene);
   return new Map(discoverComponentAnchorDetails(scene, resourceId).map((anchor) => [anchor.id, anchor.matrix]));
 }
 

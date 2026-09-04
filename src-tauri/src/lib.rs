@@ -18,7 +18,7 @@ use tauri::Url;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::process::{Command, Stdio};
 
 #[cfg(target_os = "windows")]
@@ -28,9 +28,8 @@ use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 pub mod native_cad_protocol;
 
-#[cfg(target_os = "windows")]
-const EMBEDDED_CAD_WORKER: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/kea3d-cad-worker.exe"));
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const EMBEDDED_CAD_WORKER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kea3d-cad-worker"));
 
 const SUPPORTED_MODEL_EXTENSIONS: &[&str] = &[
     "glb", "gltf", "stl", "3mf", "obj", "ply", "fbx", "dae", "step", "stp", "iges", "igs", "brep",
@@ -484,12 +483,12 @@ fn is_native_step_source(source: &FilePath, name: &str) -> bool {
         && native_cad_worker_is_embedded()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn native_cad_worker_is_embedded() -> bool {
     !EMBEDDED_CAD_WORKER.is_empty()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn native_cad_worker_is_embedded() -> bool {
     false
 }
@@ -775,9 +774,26 @@ fn write_project_file_atomic(destination: &Path, contents: &[u8]) -> Result<(), 
     Ok(())
 }
 
+fn validate_project_save_location(destination: &Path, source: &Path) -> Result<(), String> {
+    let message = "Save As must stay in the original project folder. Use Pack project to move or share the project with its GLBs.";
+    let source_parent = source.parent().and_then(|path| path.canonicalize().ok());
+    let destination_parent = destination
+        .parent()
+        .and_then(|path| path.canonicalize().ok());
+    if source_parent.is_none() || source_parent != destination_parent {
+        return Err(message.to_owned());
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
-async fn save_project_file_atomic(path: String, contents: Vec<u8>) -> Result<(), String> {
+async fn save_project_file_atomic(
+    path: String,
+    source_path: String,
+    contents: Vec<u8>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        validate_project_save_location(Path::new(&path), Path::new(&source_path))?;
         write_project_file_atomic(Path::new(&path), &contents)
     })
     .await
@@ -865,7 +881,7 @@ async fn commit_project_package_file(
     .map_err(|error| format!("The packaged project save task could not finish: {error}"))?
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn native_cad_worker_path() -> Result<PathBuf, String> {
     use std::fs;
 
@@ -877,10 +893,13 @@ fn native_cad_worker_path() -> Result<PathBuf, String> {
         .join(env!("CARGO_PKG_VERSION"));
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Could not prepare the native CAD engine: {error}"))?;
+    #[cfg(target_os = "windows")]
     let worker = directory.join(format!(
         "kea3d-cad-worker-{}.exe",
         EMBEDDED_CAD_WORKER.len()
     ));
+    #[cfg(target_os = "linux")]
+    let worker = directory.join(format!("kea3d-cad-worker-{}", EMBEDDED_CAD_WORKER.len()));
     let current_length = fs::metadata(&worker).ok().map(|metadata| metadata.len());
     if current_length != Some(EMBEDDED_CAD_WORKER.len() as u64) {
         let temporary = directory.join(format!(
@@ -897,10 +916,20 @@ fn native_cad_worker_path() -> Result<PathBuf, String> {
         fs::rename(&temporary, &worker)
             .map_err(|error| format!("Could not activate the native CAD engine: {error}"))?;
     }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&worker)
+            .map_err(|error| format!("Could not inspect the native CAD engine: {error}"))?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&worker, permissions)
+            .map_err(|error| format!("Could not activate the native CAD engine: {error}"))?;
+    }
     Ok(worker)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn encode_native_cad_frame(frame: &native_cad_protocol::Frame) -> Result<Vec<u8>, String> {
     let header = serde_json::to_vec(&frame.header)
         .map_err(|error| format!("Could not encode a native CAD event: {error}"))?;
@@ -913,7 +942,7 @@ fn encode_native_cad_frame(frame: &native_cad_protocol::Frame) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn run_native_cad_import(
     source: PathBuf,
     expected_size: u64,
@@ -925,8 +954,9 @@ fn run_native_cad_import(
         read_frame, validate_mesh_payload, SessionTracker, TerminalStatus, WorkerEvent,
         PROTOCOL_VERSION,
     };
+    #[cfg(target_os = "windows")]
     use std::os::windows::process::CommandExt;
-
+    #[cfg(target_os = "windows")]
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let actual_size = source
         .metadata()
@@ -937,7 +967,8 @@ fn run_native_cad_import(
     }
 
     let worker = native_cad_worker_path()?;
-    let mut child = Command::new(worker)
+    let mut command = Command::new(worker);
+    command
         .args([
             OsStr::new("--protocol"),
             OsStr::new("1"),
@@ -948,8 +979,10 @@ fn run_native_cad_import(
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start the native CAD engine: {error}"))?;
 
@@ -1038,7 +1071,7 @@ async fn import_pending_native_cad(
     open_state: tauri::State<'_, NativeOpenState>,
     cad_state: tauri::State<'_, NativeCadState>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         if session_id.is_empty() || session_id.len() > 128 {
             return Err("The native CAD session identifier is invalid.".to_owned());
@@ -1067,10 +1100,13 @@ async fn import_pending_native_cad(
         .await
         .map_err(|error| format!("The native CAD task could not finish: {error}"))?
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = (id, session_id, events, open_state, cad_state);
-        Err("Native large-STEP import is currently available on Windows x64 only.".to_owned())
+        Err(
+            "Native large-STEP import is currently available on Windows and Linux x64 only."
+                .to_owned(),
+        )
     }
 }
 
@@ -1320,6 +1356,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_save_as_keeps_the_original_resource_directory() {
+        let root = std::env::temp_dir().join(format!("kea3d-save-location-{}", std::process::id()));
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let source = root.join("original.kea3d");
+        assert!(validate_project_save_location(&root.join("renamed.kea3d"), &source).is_ok());
+        assert!(
+            validate_project_save_location(&other.join("moved.kea3d"), &source)
+                .unwrap_err()
+                .contains("Pack project")
+        );
+        assert!(validate_project_save_location(&root.join("missing/new.kea3d"), &source).is_err());
+        assert!(validate_project_save_location(&source, Path::new("unknown.kea3d")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn saves_project_documents_with_atomic_create_and_replace() {

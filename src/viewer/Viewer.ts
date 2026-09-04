@@ -50,6 +50,7 @@ import { analyzeModel, analyzeSelections } from './modelAnalysis';
 import { OrientationGizmo } from './OrientationGizmo';
 import { ViewSelector } from './ViewSelector';
 import { buildSceneTree } from './sceneTree';
+import { isEffectivelyVisible, pickAnchorMarker, pickVisibleMesh } from './picking';
 import { defaultForwardAxis, isForwardAxisCompatible, orientationCorrection } from './modelAdjustments';
 import { unitToMeters } from './linearUnits';
 import { sectionPlaneForBounds } from './sectionPlane';
@@ -57,7 +58,7 @@ import { throwIfLoadCancelled } from './loadControl';
 import { validateImportedScene } from './validateImportedScene';
 import { defaultMaterialPresetOptions, findMaterialPreset, type MaterialPreset, type MaterialPresetOptions } from './materialPresets';
 import { CommandHistory, type ReversibleCommand } from '../commandHistory';
-import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, validateAnchorEditInput, type AnchorEditInput, type ComponentAnchor } from '@/project/componentAnchors';
+import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, promoteLegacyNamedAnchors, validateAnchorEditInput, type AnchorEditInput, type ComponentAnchor } from '@/project/componentAnchors';
 import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
 
 const viewDirections: Record<CameraView, Vector3> = {
@@ -325,9 +326,10 @@ export class Viewer {
     try {
       throwIfLoadCancelled(signal);
       validateImportedScene(scene);
+      promoteLegacyNamedAnchors(scene, { allowInheritedScale: true });
       // A resolved assembly may contain reusable instances of one component, so
       // the same resource-local Anchor ID can legitimately appear more than once.
-      anchors = discoverComponentAnchorDetails(scene, mainFile.name, { allowDuplicateIds: true });
+      anchors = discoverComponentAnchorDetails(scene, mainFile.name, { allowDuplicateIds: true, allowInheritedScale: true });
     } catch (error) {
       if (isProgressivePreview) this.discardProgressivePreview(scene);
       else disposeObject3D(scene);
@@ -1472,7 +1474,7 @@ export class Viewer {
       const worldPerPixel = this.camera === this.perspectiveCamera
         ? 2 * this.camera.position.distanceTo(marker.position) * Math.tan(MathUtils.degToRad(this.perspectiveCamera.fov) / 2) / viewportHeight
         : (this.orthographicCamera.top - this.orthographicCamera.bottom) / this.orthographicCamera.zoom / viewportHeight;
-      marker.scale.setScalar(Math.max(worldPerPixel * 24, 0.000_001));
+      marker.children.forEach((child) => child.scale.setScalar(Math.max(worldPerPixel * 24, 0.000_001)));
       marker.visible = this.isEffectivelyVisible(source);
       const selected = this.selectedObjects.includes(source);
       const origin = marker.children.find((child) => child instanceof Mesh) as Mesh | undefined;
@@ -1657,12 +1659,7 @@ export class Viewer {
   }
 
   private isEffectivelyVisible(object: Object3D): boolean {
-    let current: Object3D | null = object;
-    while (current && current !== this.modelRoot) {
-      if (!current.visible) return false;
-      current = current.parent;
-    }
-    return true;
+    return isEffectivelyVisible(object);
   }
 
   private getMaterialTargets(scope: MaterialApplyScope): MaterialTarget[] {
@@ -1950,17 +1947,16 @@ export class Viewer {
       this.setViewSelectorVisible(false);
       return;
     }
-    if (this.anchorsVisible) {
-      const anchorHit = this.raycaster.intersectObject(this.anchorGroup, true)[0]?.object;
-      const anchorObjectId = anchorHit?.userData.kea3dAnchorObjectId;
-      if (typeof anchorObjectId === 'string') {
+    if (this.anchorsVisible && !this.measurementEnabled) {
+      this.updateAnchorMarkers();
+      const anchorHit = pickAnchorMarker(this.raycaster, this.anchorMarkers);
+      if (anchorHit) {
         const longPress = start.pointerType === 'touch' && performance.now() - start.time >= 450;
-        this.selectObject(anchorObjectId, event.ctrlKey || event.metaKey || longPress);
+        this.selectObject(anchorHit.uuid, event.ctrlKey || event.metaKey || longPress);
         return;
       }
     }
-    const hit = this.raycaster.intersectObject(this.currentModel, true)
-      .find((intersection) => intersection.object instanceof Mesh);
+    const hit = pickVisibleMesh(this.raycaster, this.currentModel);
     if (this.measurementEnabled) {
       if (hit) this.addMeasurementPoint(hit.point);
       return;

@@ -67,4 +67,16 @@ describe('Kea3D fixed assembly scenes', () => {
       ['arm-model', component([{ id: 'origin', x: 0 }, { id: 'end', x: 1 }])],
     ]))).toThrow('missing anchor "mount"');
   });
+
+  it('accepts legacy named locator leaves as project attachment Anchors', () => {
+    const scene = component();
+    const locator = new Group();
+    locator.name = 'PB_LT_01';
+    locator.position.x = 2;
+    scene.add(locator);
+
+    const anchors = discoverComponentAnchors(scene, 'legacy-part');
+    expect(anchors.get('PB_LT_01')?.elements[12]).toBeCloseTo(2);
+    expect(locator.userData.kea3d.anchor).toEqual({ version: 1, id: 'PB_LT_01' });
+  });
 });

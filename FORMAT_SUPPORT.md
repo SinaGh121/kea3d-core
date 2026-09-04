@@ -52,7 +52,6 @@ large individual meshes to avoid blocking the interface.
 
 The release suite opens generated, redistribution-safe GLB, ASCII and binary
 STL, colored ASCII and binary little-endian PLY, OBJ/MTL, and 3MF triangle
-fixtures through the production browser load path. Repeated textured and
-untextured GLB replacements must also return renderer resource counts to their
-warmed baseline. CAD, large-file,
-texture-companion, and scene-format coverage remains fixture-specific.
+fixtures through the production browser load path. CAD, large-file,
+texture-companion, and scene-format coverage remains fixture-specific and is
+tracked separately in `TASKS.md`.

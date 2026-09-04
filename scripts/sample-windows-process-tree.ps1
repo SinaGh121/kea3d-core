@@ -3,8 +3,9 @@ param(
   [ValidateRange(1, 2147483647)]
   [int]$RootProcessId,
 
-  [Parameter(Mandatory = $true)]
-  [string]$StopFile,
+  [string]$StopFile = '',
+
+  [switch]$Once,
 
   [ValidateRange(50, 5000)]
   [int]$IntervalMilliseconds = 200
@@ -17,11 +18,19 @@ $peakRendererWorkingSetBytes = 0L
 $peakGpuProcessWorkingSetBytes = 0L
 $peakGpuDedicatedBytes = $null
 $peakGpuSharedBytes = $null
+$firstWorkingSetBytes = $null
+$firstPrivateBytes = $null
+$lastWorkingSetBytes = $null
+$lastPrivateBytes = $null
 $samples = 0
 $cpuStartByProcess = @{}
 $cpuLatestByProcess = @{}
 $gpuCountersAvailable = $true
 $gpuCounterMatches = 0
+
+if (-not $Once -and [string]::IsNullOrWhiteSpace($StopFile)) {
+  throw 'StopFile is required unless Once is selected.'
+}
 
 function Get-ProcessTreeSnapshot {
   # Capture the root before the slower CIM traversal so short-lived workers still
@@ -105,8 +114,14 @@ function Get-ProcessTreeSnapshot {
 }
 
 Write-Output 'READY'
-while (-not (Test-Path -LiteralPath $StopFile)) {
+while ($Once -or -not (Test-Path -LiteralPath $StopFile)) {
   $snapshot = Get-ProcessTreeSnapshot
+  if ($samples -eq 0) {
+    $firstWorkingSetBytes = $snapshot.WorkingSetBytes
+    $firstPrivateBytes = $snapshot.PrivateBytes
+  }
+  $lastWorkingSetBytes = $snapshot.WorkingSetBytes
+  $lastPrivateBytes = $snapshot.PrivateBytes
   $samples += 1
   $peakWorkingSetBytes = [Math]::Max($peakWorkingSetBytes, $snapshot.WorkingSetBytes)
   $peakPrivateBytes = [Math]::Max($peakPrivateBytes, $snapshot.PrivateBytes)
@@ -116,6 +131,7 @@ while (-not (Test-Path -LiteralPath $StopFile)) {
     $peakGpuDedicatedBytes = if ($null -eq $peakGpuDedicatedBytes) { $snapshot.GpuDedicatedBytes } else { [Math]::Max($peakGpuDedicatedBytes, $snapshot.GpuDedicatedBytes) }
     $peakGpuSharedBytes = if ($null -eq $peakGpuSharedBytes) { $snapshot.GpuSharedBytes } else { [Math]::Max($peakGpuSharedBytes, $snapshot.GpuSharedBytes) }
   }
+  if ($Once) { break }
   Start-Sleep -Milliseconds $IntervalMilliseconds
 }
 
@@ -130,6 +146,12 @@ foreach ($processId in $cpuLatestByProcess.Keys) {
   samples = $samples
   peakWorkingSetMiB = [Math]::Round($peakWorkingSetBytes / $mebibyte, 3)
   peakPrivateMemoryMiB = [Math]::Round($peakPrivateBytes / $mebibyte, 3)
+  firstWorkingSetMiB = if ($null -eq $firstWorkingSetBytes) { $null } else { [Math]::Round($firstWorkingSetBytes / $mebibyte, 3) }
+  finalWorkingSetMiB = if ($null -eq $lastWorkingSetBytes) { $null } else { [Math]::Round($lastWorkingSetBytes / $mebibyte, 3) }
+  workingSetGrowthMiB = if ($null -eq $firstWorkingSetBytes -or $null -eq $lastWorkingSetBytes) { $null } else { [Math]::Round(($lastWorkingSetBytes - $firstWorkingSetBytes) / $mebibyte, 3) }
+  firstPrivateMemoryMiB = if ($null -eq $firstPrivateBytes) { $null } else { [Math]::Round($firstPrivateBytes / $mebibyte, 3) }
+  finalPrivateMemoryMiB = if ($null -eq $lastPrivateBytes) { $null } else { [Math]::Round($lastPrivateBytes / $mebibyte, 3) }
+  privateMemoryGrowthMiB = if ($null -eq $firstPrivateBytes -or $null -eq $lastPrivateBytes) { $null } else { [Math]::Round(($lastPrivateBytes - $firstPrivateBytes) / $mebibyte, 3) }
   peakRendererWorkingSetMiB = [Math]::Round($peakRendererWorkingSetBytes / $mebibyte, 3)
   peakGpuProcessWorkingSetMiB = [Math]::Round($peakGpuProcessWorkingSetBytes / $mebibyte, 3)
   peakGpuDedicatedMiB = if ($null -eq $peakGpuDedicatedBytes) { $null } else { [Math]::Round($peakGpuDedicatedBytes / $mebibyte, 3) }

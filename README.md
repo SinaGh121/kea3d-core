@@ -16,8 +16,6 @@ Then open the local URL shown by Vite and drop a supported model. Current import
 - Compatibility conversion: BLEND through a lazy local Assimp worker. New or feature-heavy Blender files may still need export to GLB.
 - Assembly projects: validated `.kea3d` Project v1 manifests and self-contained `.kea3dp` packages with reusable GLB instances and fixed anchor-to-anchor attachments.
 
-Anchors can be shown in the viewport and Scene objects tree, selected, fitted, and inspected by stable ID, parent, world position, and rotation. Standalone models support creating, editing, deleting, undoing, and exporting persistent Anchors in GLB copies. Resolved `.kea3d`/`.kea3dp` assemblies remain inspection-only so their source component files are never changed implicitly. Anchor helpers are excluded from geometry bounds.
-
 Select companion material, binary, and texture files together with the main model when the format references external files.
 On the web/PWA, use **Open project folder**, select the `.kea3d` manifest and referenced GLBs together, or open one self-contained `.kea3dp`. Desktop apps and file associations securely resolve referenced GLBs relative to transparent manifests automatically. Kea3D validates the graph, optional resource integrity metadata, anchors, and packaged ZIP boundary before replacing the open model. Its Export workspace saves manifests, packs or atomically resaves `.kea3dp` transports, and creates standard flattened GLBs with resolved assembly transforms.
 
@@ -48,6 +46,16 @@ and the exact versioned public source release on every platform.
 The installer registers supported model formats. The portable executable also opens
 a model passed on its command line, so Windows **Open with** and double-click file
 associations work after selecting `Kea3D-portable-current.exe` as the default app.
+
+## Linux portable build
+
+Install the Tauri Linux prerequisites, CMake, and the OpenCascade data-exchange development package, then run:
+
+```sh
+npm run desktop:build
+```
+
+The portable artifact is created under `src-tauri/target/release/bundle/appimage/`. It includes the native x64 XCAF STEP worker and its OpenCascade runtime, so STEP presentation colors use the same resolver as Windows without uploading or changing the model. The native Open dialog accepts lowercase and uppercase `.step`/`.stp` suffixes, and file-manager drops enter the same validated local-file queue.
 
 ## Android and iOS
 

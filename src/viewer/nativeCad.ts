@@ -3,6 +3,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { loadCancelledError, throwIfLoadCancelled } from './loadControl';
 import { registerPreparedModel } from './preparedModel';
 import { disposeObject3D } from './disposeObject';
+import { createNativeCadDeliveryBarrier } from './nativeCadDelivery';
 import type { LoadProgress } from './types';
 
 export interface NativeCadProgressiveHandlers {
@@ -120,6 +121,7 @@ export async function importNativeCadFile(
   let terminalMessage: string | undefined;
   let eventError: Error | null = null;
   const events = new Channel<NativeBytes>();
+  const terminalDelivery = createNativeCadDeliveryBarrier();
 
   events.onmessage = (value) => {
     if (eventError) return;
@@ -139,9 +141,11 @@ export async function importNativeCadFile(
       } else if (header.type === 'terminal') {
         terminalStatus = header.status;
         terminalMessage = header.message;
+        terminalDelivery.markDelivered();
       }
     } catch (error) {
       eventError = error instanceof Error ? error : new Error(String(error));
+      terminalDelivery.markDelivered();
       void invoke('cancel_native_cad_import', { sessionId }).catch(() => undefined);
     }
   };
@@ -151,6 +155,8 @@ export async function importNativeCadFile(
   let completed = false;
   try {
     await invoke('import_pending_native_cad', { id: pendingId, sessionId, events });
+    // Tauri does not guarantee that queued channel callbacks run before the command promise resolves.
+    await terminalDelivery.wait();
     throwIfLoadCancelled(signal);
     if (eventError) throw eventError;
     if (terminalStatus === 'cancelled') throw loadCancelledError();

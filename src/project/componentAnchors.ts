@@ -1,6 +1,7 @@
 import { Euler, MathUtils, Matrix4, Quaternion, Vector3, type Object3D } from 'three';
 
 const anchorIdPattern = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
+const legacyNamedAnchorPattern = /^[A-Z][A-Z0-9]{1,7}_[A-Z][A-Z0-9]{1,7}_[0-9]{2,4}$/;
 const unitScaleTolerance = 1e-5;
 
 export interface ComponentAnchor {
@@ -59,8 +60,55 @@ export function applyAnchorEdit(object: Object3D, input: AnchorEditInput): void 
   object.scale.set(1, 1, 1);
   object.userData.kea3d = {
     ...(typeof object.userData.kea3d === 'object' && object.userData.kea3d !== null ? object.userData.kea3d : {}),
-    anchor: { version: 1, id: input.id },
+    anchor: {
+      ...(typeof object.userData.kea3d?.anchor === 'object' && object.userData.kea3d.anchor !== null && !Array.isArray(object.userData.kea3d.anchor) ? object.userData.kea3d.anchor : {}),
+      version: 1,
+      id: input.id,
+    },
   };
+}
+
+export function promoteLegacyNamedAnchors(scene: Object3D, options: { allowInheritedScale?: boolean } = {}): number {
+  scene.updateMatrixWorld(true);
+  let promoted = 0;
+  scene.traverse((object) => {
+    if (object.children.length > 0 || !legacyNamedAnchorPattern.test(object.name.trim())) return;
+    if (!['Object3D', 'Group'].includes(object.type) || anchorIdForObject(object, 'model')) return;
+    try {
+      anchorTransform(object, 'model', object.name.trim(), options.allowInheritedScale);
+    } catch {
+      // A name is only a compatibility hint, never grounds to reject a model.
+      return;
+    }
+    const kea3d = typeof object.userData.kea3d === 'object' && object.userData.kea3d !== null
+      ? object.userData.kea3d as Record<string, unknown>
+      : {};
+    object.userData.kea3d = {
+      ...kea3d,
+      anchor: { version: 1, id: object.name.trim() },
+    };
+    promoted += 1;
+  });
+  return promoted;
+}
+
+function anchorTransform(object: Object3D, resourceId: string, id: string, allowInheritedScale = false) {
+  const position = new Vector3();
+  const rotation = new Quaternion();
+  const scale = new Vector3();
+  object.matrixWorld.decompose(position, rotation, scale);
+  if (![...position.toArray(), ...rotation.toArray(), ...scale.toArray()].every(Number.isFinite)) {
+    anchorError(resourceId, `anchor "${id}" has a non-finite transform.`);
+  }
+  const checkedScale = allowInheritedScale
+    ? new Vector3().setFromMatrixScale(object.matrix)
+    : scale;
+  if ((allowInheritedScale && object.matrix.determinant() <= 0) || checkedScale.toArray().some((value) => !Number.isFinite(value) || Math.abs(value - 1) > unitScaleTolerance)) {
+    anchorError(resourceId, `anchor "${id}" must not contain scale.`);
+  }
+  if (Math.abs(rotation.length() - 1) > unitScaleTolerance) anchorError(resourceId, `anchor "${id}" has an invalid rotation.`);
+  rotation.normalize();
+  return { position, rotation };
 }
 
 export function discoverComponentAnchorDetails(
@@ -76,18 +124,7 @@ export function discoverComponentAnchorDetails(
     if (!id) return;
     if (!options.allowDuplicateIds && ids.has(id)) anchorError(resourceId, `anchor ID "${id}" is duplicated.`);
     ids.add(id);
-    const position = new Vector3();
-    const rotation = new Quaternion();
-    const scale = new Vector3();
-    object.matrixWorld.decompose(position, rotation, scale);
-    if (![...position.toArray(), ...rotation.toArray(), ...scale.toArray()].every(Number.isFinite)) {
-      anchorError(resourceId, `anchor "${id}" has a non-finite transform.`);
-    }
-    if (!options.allowInheritedScale && (Math.abs(scale.x - 1) > unitScaleTolerance || Math.abs(scale.y - 1) > unitScaleTolerance || Math.abs(scale.z - 1) > unitScaleTolerance)) {
-      anchorError(resourceId, `anchor "${id}" must not contain scale.`);
-    }
-    if (Math.abs(rotation.length() - 1) > unitScaleTolerance) anchorError(resourceId, `anchor "${id}" has an invalid rotation.`);
-    rotation.normalize();
+    const { position, rotation } = anchorTransform(object, resourceId, id, options.allowInheritedScale);
     anchors.push({
       id,
       name: object.name.trim() || id,

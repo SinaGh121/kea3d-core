@@ -9,6 +9,7 @@ function parseArguments(arguments_) {
   const options = {
     files: [], repeat: 3, output: '', port: 4174, cacheMode: 'isolated', timeoutMs: 300_000,
     verifyCacheInvalidation: false, maxProcessTreeMiB: 0, maxGpuProcessMiB: 0, headed: false,
+    replacementCycles: 0, maxReplacementJsHeapGrowthMiB: 0, maxReplacementProcessGrowthMiB: 0,
   };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
@@ -22,6 +23,9 @@ function parseArguments(arguments_) {
     else if (argument === '--verify-cache-invalidation') options.verifyCacheInvalidation = true;
     else if (argument === '--max-process-tree-mib' && value) { options.maxProcessTreeMiB = Number.parseFloat(value); index += 1; }
     else if (argument === '--max-gpu-process-mib' && value) { options.maxGpuProcessMiB = Number.parseFloat(value); index += 1; }
+    else if (argument === '--replacement-cycles' && value) { options.replacementCycles = Number.parseInt(value, 10); index += 1; }
+    else if (argument === '--max-replacement-js-heap-growth-mib' && value) { options.maxReplacementJsHeapGrowthMiB = Number.parseFloat(value); index += 1; }
+    else if (argument === '--max-replacement-process-growth-mib' && value) { options.maxReplacementProcessGrowthMiB = Number.parseFloat(value); index += 1; }
     else if (argument === '--headed') options.headed = true;
     else throw new Error(`Unknown or incomplete argument: ${argument}`);
   }
@@ -31,7 +35,10 @@ function parseArguments(arguments_) {
   if (!['isolated', 'cold-warm'].includes(options.cacheMode)) throw new Error('--cache-mode must be isolated or cold-warm.');
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1_000) throw new Error('--timeout-ms must be at least 1000.');
   if (options.verifyCacheInvalidation && options.cacheMode !== 'cold-warm') throw new Error('--verify-cache-invalidation requires --cache-mode cold-warm.');
-  if (![options.maxProcessTreeMiB, options.maxGpuProcessMiB].every((value) => Number.isFinite(value) && value >= 0)) throw new Error('Memory limits must be non-negative numbers.');
+  if (options.replacementCycles !== 0 && (!Number.isInteger(options.replacementCycles) || options.replacementCycles < 3 || options.replacementCycles > 20)) throw new Error('--replacement-cycles must be between 3 and 20.');
+  if (options.replacementCycles > 0 && options.cacheMode !== 'isolated') throw new Error('--replacement-cycles requires --cache-mode isolated.');
+  if (options.replacementCycles > 0 && options.verifyCacheInvalidation) throw new Error('--replacement-cycles cannot verify CAD cache invalidation.');
+  if (![options.maxProcessTreeMiB, options.maxGpuProcessMiB, options.maxReplacementJsHeapGrowthMiB, options.maxReplacementProcessGrowthMiB].every((value) => Number.isFinite(value) && value >= 0)) throw new Error('Memory limits must be non-negative numbers.');
   return options;
 }
 
@@ -186,6 +193,19 @@ async function startProcessTreeSampler(rootProcessId) {
   };
 }
 
+function snapshotProcessTree(rootProcessId) {
+  if (process.platform !== 'win32' || !rootProcessId) return null;
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', resolve('scripts/sample-windows-process-tree.ps1'),
+    '-RootProcessId', String(rootProcessId), '-Once',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (result.status !== 0) throw new Error(`Windows process snapshot failed (${result.status}): ${result.stderr.trim()}`);
+  const json = result.stdout.split(/\r?\n/).reverse().find((line) => line.trim().startsWith('{'));
+  if (!json) throw new Error(`Windows process snapshot returned no metrics: ${result.stderr.trim()}`);
+  return JSON.parse(json);
+}
+
 async function waitForLoadMetric(page, file, timeoutMs) {
   const metricPromise = page.evaluate(() => new Promise((resolveMetric) => {
     globalThis.addEventListener('kea3d:load-metric', (event) => resolveMetric(event.detail), { once: true });
@@ -277,6 +297,83 @@ async function runPage(context, file, iteration, cacheState, timeoutMs, browserP
   }
 }
 
+async function runReplacementSequence(context, files, cycles, timeoutMs, browserProcessId) {
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto(baseUrl, { waitUntil: 'networkidle' });
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const sampler = await startProcessTreeSampler(browserProcessId);
+  const steps = [];
+  let processTree = null;
+  try {
+    for (let cycle = 1; cycle <= cycles; cycle += 1) {
+      for (const file of files) {
+        const load = await waitForLoadMetric(page, file, timeoutMs);
+        await page.waitForTimeout(250);
+        await cdp.send('HeapProfiler.collectGarbage');
+        const performanceMetrics = (await cdp.send('Performance.getMetrics')).metrics;
+        const processSnapshot = snapshotProcessTree(browserProcessId);
+        steps.push({
+          cycle,
+          file: fileLabel(file),
+          load,
+          jsHeapUsedMiB: (metricValue(performanceMetrics, 'JSHeapUsedSize') ?? 0) / 1024 / 1024,
+          jsHeapTotalMiB: (metricValue(performanceMetrics, 'JSHeapTotalSize') ?? 0) / 1024 / 1024,
+          processWorkingSetMiB: processSnapshot?.finalWorkingSetMiB ?? null,
+          processPrivateMemoryMiB: processSnapshot?.finalPrivateMemoryMiB ?? null,
+        });
+        if (load.status !== 'success') throw new Error(`${fileLabel(file)} replacement cycle ${cycle} failed.`);
+      }
+    }
+  } finally {
+    if (sampler) processTree = await sampler.stop();
+    await page.close();
+  }
+  if (errors.length > 0) throw new Error(`Replacement sequence raised page errors:\n${errors.join('\n')}`);
+
+  const rendererViolations = [];
+  const processGrowthByFile = [];
+  for (const file of [...new Set(steps.map((step) => step.file))]) {
+    const matching = steps.filter((step) => step.file === file);
+    const baseline = matching[1]?.load.renderer;
+    if (!baseline) throw new Error(`${file} did not expose a warmed renderer baseline.`);
+    for (const step of matching.slice(2)) {
+      for (const resource of ['geometries', 'textures', 'programs']) {
+        if (step.load.renderer?.[resource] !== baseline[resource]) {
+          rendererViolations.push(`${file} cycle ${step.cycle} ${resource} ${step.load.renderer?.[resource]} != warmed baseline ${baseline[resource]}`);
+        }
+      }
+    }
+    const processBaseline = matching[1]?.processWorkingSetMiB;
+    const laterProcessValues = matching.slice(2).map((step) => step.processWorkingSetMiB).filter(Number.isFinite);
+    processGrowthByFile.push({
+      file,
+      baselineWorkingSetMiB: processBaseline,
+      finalWorkingSetMiB: matching.at(-1)?.processWorkingSetMiB ?? null,
+      maximumGrowthMiB: Number.isFinite(processBaseline) && laterProcessValues.length > 0
+        ? Math.max(...laterProcessValues.map((value) => value - processBaseline))
+        : null,
+    });
+  }
+  const warmedSteps = steps.filter((step) => step.cycle >= 2);
+  const firstWarmedHeapMiB = warmedSteps[0]?.jsHeapUsedMiB ?? 0;
+  const finalHeapMiB = warmedSteps.at(-1)?.jsHeapUsedMiB ?? 0;
+  return {
+    cycles,
+    files: files.map(fileLabel),
+    steps,
+    rendererViolations,
+    firstWarmedHeapMiB,
+    finalHeapMiB,
+    jsHeapGrowthMiB: finalHeapMiB - firstWarmedHeapMiB,
+    processGrowthByFile,
+    maximumProcessWorkingSetGrowthMiB: maximumAvailable(processGrowthByFile.map((entry) => entry.maximumGrowthMiB)),
+    processTree,
+  };
+}
+
 const options = parseArguments(process.argv.slice(2));
 const baseUrl = `http://127.0.0.1:${options.port}`;
 const preview = spawn(process.execPath, [
@@ -307,7 +404,15 @@ try {
   }
   const runs = [];
   const cacheInvalidations = [];
-  for (const file of options.files) {
+  let replacement = null;
+  if (options.replacementCycles > 0) {
+    const context = await browser.newContext({ serviceWorkers: 'block' });
+    try {
+      replacement = await runReplacementSequence(context, options.files, options.replacementCycles, options.timeoutMs, browserProcessId);
+    } finally {
+      await context.close();
+    }
+  } else for (const file of options.files) {
     const digestVariant = options.verifyCacheInvalidation && isCadFile(file) ? await createDigestVariant(file) : null;
     for (let iteration = 1; iteration <= options.repeat; iteration += 1) {
       const context = await browser.newContext({ serviceWorkers: 'block' });
@@ -354,8 +459,17 @@ try {
   const summaries = summarize(runs);
   const memoryLimits = { processTreeMiB: options.maxProcessTreeMiB || null, gpuProcessMiB: options.maxGpuProcessMiB || null };
   const limitViolations = memoryLimitViolations(summaries, options);
+  if (replacement) {
+    limitViolations.push(...replacement.rendererViolations);
+    if (options.maxReplacementJsHeapGrowthMiB > 0 && replacement.jsHeapGrowthMiB > options.maxReplacementJsHeapGrowthMiB) {
+      limitViolations.push(`replacement JS heap growth ${replacement.jsHeapGrowthMiB.toFixed(1)} MiB exceeds ${options.maxReplacementJsHeapGrowthMiB.toFixed(1)} MiB`);
+    }
+    if (options.maxReplacementProcessGrowthMiB > 0 && replacement.maximumProcessWorkingSetGrowthMiB > options.maxReplacementProcessGrowthMiB) {
+      limitViolations.push(`replacement same-file process-tree working-set growth ${replacement.maximumProcessWorkingSetGrowthMiB.toFixed(1)} MiB exceeds ${options.maxReplacementProcessGrowthMiB.toFixed(1)} MiB`);
+    }
+  }
   const report = {
-    schema: 'kea3d-viewer-benchmark-v2',
+    schema: 'kea3d-viewer-benchmark-v3',
     createdAt: new Date().toISOString(),
     commit,
     platform: { os: process.platform, arch: process.arch, node: process.version, browser: browser.version(), browserMode: options.headed ? 'headed' : 'headless', processTreeSampling: process.platform === 'win32' ? 'windows-200ms' : 'unavailable', gpu },
@@ -365,6 +479,7 @@ try {
     summaries,
     cadCacheComparisons: compareCadCache(summaries),
     cacheInvalidations,
+    replacement,
     memoryLimits,
     limitViolations,
     runs,
@@ -373,7 +488,9 @@ try {
   const output = options.output || resolve('artifacts/benchmarks', defaultName);
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(`Wrote ${runs.length} benchmark run(s) to ${output}`);
+  const recordedLoads = replacement ? replacement.steps.length : runs.length;
+  const runKind = replacement ? 'replacement load(s)' : 'benchmark run(s)';
+  console.log(`Wrote ${recordedLoads} ${runKind} to ${output}`);
   for (const run of runs) {
     const processMemory = run.processTree ? `, ${run.processTree.peakWorkingSetMiB.toFixed(1)} MiB process-tree peak` : '';
     console.log(`${run.file} #${run.iteration} (${run.cacheState}): ${run.load.totalMs.toFixed(1)} ms, ${run.browser.jsHeapUsedMiB.toFixed(1)} MiB JS heap, ${run.browser.indexedDbMiB.toFixed(1)} MiB IndexedDB${processMemory}`);
@@ -383,6 +500,10 @@ try {
   }
   for (const invalidation of report.cacheInvalidations) {
     console.log(`${invalidation.file} source-digest invalidation: ${invalidation.outcome} (${invalidation.entriesAfterOriginal} -> ${invalidation.entriesAfterChangedSource} entries)`);
+  }
+  if (report.replacement) {
+    const processGrowth = report.replacement.maximumProcessWorkingSetGrowthMiB;
+    console.log(`replacement sequence: ${report.replacement.cycles} cycle(s), ${report.replacement.steps.length} load(s), ${report.replacement.jsHeapGrowthMiB.toFixed(1)} MiB warmed JS-heap growth${Number.isFinite(processGrowth) ? `, ${processGrowth.toFixed(1)} MiB maximum same-file process-tree working-set growth` : ''}`);
   }
   if (report.limitViolations.length > 0) throw new Error(`Memory regression gate failed:\n${report.limitViolations.join('\n')}`);
 } finally {

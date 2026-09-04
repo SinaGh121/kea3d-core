@@ -51,7 +51,7 @@ export default function ProjectSaveControls({
           <Button variant="outline" size="sm" disabled={saving} onClick={() => void run('save-as')}>Save as…</Button>
         </div>
         {!packaged && <Button variant="outline" size="sm" disabled={saving} onClick={() => void run('pack')}><Archive /> Pack project</Button>}
-        <p className="text-[10px] leading-relaxed text-muted-foreground">{packaged ? 'Desktop saves replace the package atomically. Source component GLBs remain untouched.' : 'Pack creates one portable .kea3dp containing this manifest and every required GLB. Save As keeps external relative paths unchanged.'}</p>
+        <p className="text-[10px] leading-relaxed text-muted-foreground">{packaged ? 'Desktop saves replace the package atomically. Source component GLBs remain untouched.' : 'Pack project includes every required GLB for moving or sharing. Desktop Save As stays in the original project folder. Browser downloads contain only the manifest; keep it beside its component folders. On mobile, use Pack project.'}</p>
       </div>
       <Separator />
     </>

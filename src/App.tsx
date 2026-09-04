@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { BetweenHorizontalStart, Box, Boxes, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Download, Ellipsis, Eye, EyeOff, FileBox, FlipHorizontal2, Focus, FolderOpen, Grid3X3, Info, Keyboard, Layers3, Maximize2, Move3D, Network, Orbit, PaintBucket, Pause, Play, Redo2, Repeat2, RotateCcw, Ruler, Scan, ScanBox, ScissorsLineDashed, Settings2, Share2, Sun, Undo2, Upload, View, X } from 'lucide-react';
+import { Axis3D, BetweenHorizontalStart, Box, Boxes, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Download, Ellipsis, Eye, EyeOff, FileBox, FlipHorizontal2, Focus, FolderOpen, Grid3X3, Info, Keyboard, Layers3, Maximize2, Move3D, Network, Orbit, PaintBucket, Pause, Play, Redo2, Repeat2, RotateCcw, Ruler, Scan, ScanBox, ScissorsLineDashed, Settings2, Share2, Sun, Undo2, Upload, View, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -33,7 +33,10 @@ import type { Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/projec
 import type { AnchorEditInput } from '@/project/componentAnchors';
 import { createLoadMetricTracker, type LoadMetricStatus } from '@/performance/loadMetrics';
 
-const acceptedExtensions = ['.kea3dp', '.kea3d', '.glb', '.gltf', '.stl', '.3mf', '.obj', '.mtl', '.ply', '.fbx', '.dae', '.step', '.stp', '.iges', '.igs', '.brep', '.blend', '.bin', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.ktx2'].join(',');
+const acceptedExtensionValues = ['kea3dp', 'kea3d', 'glb', 'gltf', 'stl', '3mf', 'obj', 'mtl', 'ply', 'fbx', 'dae', 'step', 'stp', 'iges', 'igs', 'brep', 'blend', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'ktx2'];
+const acceptedExtensions = acceptedExtensionValues.map((extension) => `.${extension}`).join(',');
+// GTK file filters are case-sensitive, and exported CAD filenames commonly use uppercase extensions.
+const nativePickerExtensions = [...new Set(acceptedExtensionValues.flatMap((extension) => [extension, extension.toUpperCase()]))];
 const legalDocuments = {
   license: {
     title: 'Kea3D Core license',
@@ -445,15 +448,15 @@ function ResponsivePanel({ title, description, onClose, children, desktopClassNa
       <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
         <SheetContent
           side="bottom"
-          className="max-h-[min(82dvh,42rem)] gap-0 rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
+          className="max-h-[min(82dvh,42rem)] gap-0 overflow-hidden rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
           style={compactFixedHeight ? { height: 'min(82dvh, 42rem)' } : undefined}
           showCloseButton
         >
-          <SheetHeader className="pr-12 pb-3">
+          <SheetHeader className="shrink-0 pr-12 pb-3">
             <SheetTitle className={cn('text-sm font-semibold', titleClassName)}>{title}</SheetTitle>
             {description && <SheetDescription className="text-xs">{description}</SheetDescription>}
           </SheetHeader>
-          <div className={cn('min-h-0 overflow-y-auto overscroll-contain px-4 pb-4 max-lg:[&_[data-slot=button]]:min-h-11 max-lg:[&_[data-slot=button]]:min-w-11', contentClassName)}>{children}</div>
+          <div data-testid="responsive-panel-scroll" className={cn('min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 pb-4 [scrollbar-gutter:stable] max-lg:[&_[data-slot=button]]:min-h-11 max-lg:[&_[data-slot=button]]:min-w-11', contentClassName)}>{children}</div>
         </SheetContent>
       </Sheet>
     );
@@ -468,7 +471,7 @@ function ResponsivePanel({ title, description, onClose, children, desktopClassNa
         </div>
         <CardAction><Button variant="ghost" size="icon-sm" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X /></Button></CardAction>
       </CardHeader>
-      <CardContent className={contentClassName}>{children}</CardContent>
+      <CardContent data-testid="responsive-panel-scroll" className={contentClassName}>{children}</CardContent>
     </Card>
   );
 }
@@ -1271,6 +1274,48 @@ export default function App() {
     };
   }, [loadFiles, nativeShell]);
 
+  useEffect(() => {
+    if (!desktopNativeShell) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) => (
+      getCurrentWebview().onDragDropEvent((event) => {
+        if (disposed) return;
+        if (event.payload.type === 'enter') {
+          setDragging(true);
+          return;
+        }
+        if (event.payload.type === 'leave') {
+          setDragging(false);
+          return;
+        }
+        if (event.payload.type !== 'drop') return;
+
+        setDragging(false);
+        const paths = event.payload.paths;
+        if (paths.length === 0) return;
+        void import('@tauri-apps/api/core').then(({ invoke }) => (
+          invoke<number>('queue_open_file_paths', { paths })
+        )).then((queued) => {
+          if (!disposed && queued === 0) showError('Drop a supported 3D model file.');
+        }).catch((error: unknown) => {
+          if (!disposed) showError(error instanceof Error ? error.message : String(error));
+        });
+      })
+    )).then((listener) => {
+      if (disposed) listener();
+      else unlisten = listener;
+    }).catch((error: unknown) => {
+      if (!disposed) showError(error instanceof Error ? error.message : String(error));
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [desktopNativeShell]);
+
   const chooseModelFiles = useCallback(async () => {
     if (!desktopNativeShell) {
       inputRef.current?.click();
@@ -1286,7 +1331,10 @@ export default function App() {
         directory: false,
         filters: [{
           name: '3D models',
-          extensions: ['kea3dp', 'kea3d', 'glb', 'gltf', 'stl', '3mf', 'obj', 'mtl', 'ply', 'fbx', 'dae', 'step', 'stp', 'iges', 'igs', 'brep', 'blend', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'avif', 'ktx2'],
+          extensions: nativePickerExtensions,
+        }, {
+          name: 'STEP files (.step, .stp)',
+          extensions: ['step', 'STEP', 'stp', 'STP'],
         }],
       });
       if (!selected) return;
@@ -2057,6 +2105,7 @@ export default function App() {
               <ToolButton label="Fit model" icon={<Focus />} onClick={() => viewerRef.current?.fit()} />
               <ToolButton active={viewSelectorVisible} label="View selector" icon={<View />} onClick={toggleViewSelector} />
               <ToolButton active={treeVisible} label="Scene objects" icon={<Layers3 />} onClick={toggleScenePanel} />
+              {anchorCount > 0 && <ToolButton active={anchorsVisible} label={anchorsVisible ? 'Hide anchors' : 'Show anchors'} icon={<Axis3D />} onClick={() => toggleAnchorsVisible(!anchorsVisible)} />}
               <ToolButton active={isolationActive} disabled={!canIsolateSelection && !isolationActive} label={isolateSelectionLabel} icon={isolationActive ? <Boxes /> : <Scan />} onClick={toggleSelectionIsolation} />
               <ToolButton active={displayMode !== 'solid'} label={`Display: ${displayMode[0].toUpperCase()}${displayMode.slice(1)} · click to cycle`} icon={<Network />} onClick={cycleDisplayMode} />
               <ToolButton active={projection === 'orthographic'} label={projection === 'perspective' ? 'Use orthographic view' : 'Use perspective view'} icon={<ScanBox />} onClick={toggleProjection} />
@@ -2100,6 +2149,7 @@ export default function App() {
                 <DropdownMenuContent align="center" sideOffset={10} className="w-60">
                   <DropdownMenuLabel>View and inspect</DropdownMenuLabel>
                   <DropdownMenuCheckboxItem checked={gridVisible} onCheckedChange={() => toggleGrid()}><Grid3X3 /> Grid</DropdownMenuCheckboxItem>
+                  {anchorCount > 0 && <DropdownMenuCheckboxItem checked={anchorsVisible} onCheckedChange={(checked) => toggleAnchorsVisible(checked === true)}><Axis3D /> Show anchors</DropdownMenuCheckboxItem>}
                   <DropdownMenuCheckboxItem checked={infoVisible} onCheckedChange={() => toggleInfoPanel()}><Info /> Model info</DropdownMenuCheckboxItem>
                   <DropdownMenuCheckboxItem checked={measurementVisible} onCheckedChange={() => toggleMeasurementPanel()}><BetweenHorizontalStart /> Measure</DropdownMenuCheckboxItem>
                   <DropdownMenuCheckboxItem disabled={!selectedId} checked={materialVisible} onCheckedChange={() => toggleMaterialPanel()}><PaintBucket /> Set material</DropdownMenuCheckboxItem>
@@ -2172,6 +2222,7 @@ export default function App() {
                     <OverflowToolButton label={rotationMode === 'fixed-up' ? 'Free orbit' : 'Fixed up'} icon={<Orbit />} active={rotationMode === 'free'} onClick={() => { toggleRotationMode(); setMobileToolsVisible(false); }} />
                     <OverflowToolButton label="Model info" icon={<Info />} active={infoVisible} onClick={() => { toggleInfoPanel(); setMobileToolsVisible(false); }} />
                     <OverflowToolButton label="Lighting" icon={<Sun />} active={lightingVisible} onClick={() => { toggleLightingPanel(); setMobileToolsVisible(false); }} />
+                    {anchorCount > 0 && <OverflowToolButton label={anchorsVisible ? 'Hide anchors' : 'Show anchors'} icon={<Axis3D />} active={anchorsVisible} onClick={() => { toggleAnchorsVisible(!anchorsVisible); setMobileToolsVisible(false); }} />}
                     <OverflowToolButton label="Measure" icon={<BetweenHorizontalStart />} active={measurementVisible} onClick={() => { toggleMeasurementPanel(); setMobileToolsVisible(false); }} />
                     <OverflowToolButton label="Set material" icon={<PaintBucket />} active={materialVisible} disabled={!selectedId} onClick={() => { toggleMaterialPanel(); setMobileToolsVisible(false); }} />
                     <OverflowToolButton label="Adjust model" icon={<Ruler />} active={adjustVisible} onClick={() => { toggleAdjustPanel(); setMobileToolsVisible(false); }} />
@@ -2389,8 +2440,9 @@ export default function App() {
               title="Settings"
               description="Saved automatically on this device"
               onClose={() => setSettingsVisible(false)}
-              desktopClassName="absolute top-20 right-5 z-30 max-h-[calc(100%_-_100px)] w-[340px] gap-3 bg-card/94 shadow-2xl backdrop-blur-md"
-              contentClassName="min-h-0 overflow-y-auto pr-1"
+              desktopClassName="absolute top-20 right-5 z-30 h-[calc(100%_-_100px)] w-[340px] gap-3 bg-card/94 shadow-2xl backdrop-blur-md"
+              compactFixedHeight
+              contentClassName="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]"
             >
               <Accordion type="multiple" defaultValue={['appearance', 'viewer']}>
                 <AccordionItem value="appearance">

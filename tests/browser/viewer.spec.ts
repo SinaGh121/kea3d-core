@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 function triangleModel(
   includeSecondPart = false,
   duplicateMaterialRecords = false,
-  anchors: Array<{ id: string; x: number }> = [],
+  anchors: Array<{ id: string; x: number; legacy?: boolean }> = [],
 ): Buffer {
   const positions = Buffer.alloc(36);
   [0, 0, 0, 1, 0, 0, 0, 1, 0].forEach((value, index) => positions.writeFloatLE(value, index * 4));
@@ -24,7 +24,7 @@ function triangleModel(
       ...anchors.map((anchor) => ({
         name: anchor.id,
         translation: [anchor.x, 0, 0],
-        extras: { kea3d: { anchor: { id: anchor.id, version: 1 } } },
+        ...(!anchor.legacy && { extras: { kea3d: { anchor: { id: anchor.id, version: 1 } } } }),
       })),
     ],
     meshes: [
@@ -108,6 +108,33 @@ function embeddedTextureModel(): Buffer {
   return Buffer.concat([header, jsonHeader, paddedJson, binaryHeader, paddedBinary]);
 }
 
+function externalTriangleModel(): { gltf: Buffer; binary: Buffer } {
+  const positions = Buffer.alloc(36);
+  [0, 0, 0, 1, 0, 0, 0, 1, 0].forEach((value, index) => positions.writeFloatLE(value, index * 4));
+  const indices = Buffer.alloc(6);
+  [0, 1, 2].forEach((value, index) => indices.writeUInt16LE(value, index * 2));
+  const binary = Buffer.concat([positions, indices]);
+  return {
+    gltf: Buffer.from(JSON.stringify({
+      asset: { version: '2.0', generator: 'Kea3D nested companion browser test' },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ name: 'Nested external triangle', mesh: 0 }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+      buffers: [{ uri: '../shared/geometry.bin', byteLength: binary.byteLength }],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: positions.byteLength, target: 34962 },
+        { buffer: 0, byteOffset: positions.byteLength, byteLength: indices.byteLength, target: 34963 },
+      ],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+        { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' },
+      ],
+    })),
+    binary,
+  };
+}
+
 function glbJson(buffer: Buffer): Record<string, unknown> {
   expect(buffer.readUInt32LE(0)).toBe(0x46546c67);
   const jsonLength = buffer.readUInt32LE(12);
@@ -166,35 +193,63 @@ const meshFormatCases: Array<{
   {
     label: 'ASCII STL',
     expectedName: /Open another model.*format-triangle\.stl/,
-    files: { name: 'format-triangle.stl', mimeType: 'model/stl', buffer: Buffer.from('solid triangle\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\nvertex 0 10 0\nendloop\nendfacet\nendsolid triangle') },
+    files: {
+      name: 'format-triangle.stl',
+      mimeType: 'model/stl',
+      buffer: Buffer.from('solid triangle\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\nvertex 0 10 0\nendloop\nendfacet\nendsolid triangle'),
+    },
   },
   {
     label: 'ASCII PLY with vertex colors',
     expectedName: /Open another model.*format-triangle\.ply/,
-    files: { name: 'format-triangle.ply', mimeType: 'application/octet-stream', buffer: Buffer.from('ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n10 0 0 0 255 0\n0 10 0 0 0 255\n3 0 1 2') },
+    files: {
+      name: 'format-triangle.ply',
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.from('ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n10 0 0 0 255 0\n0 10 0 0 0 255\n3 0 1 2'),
+    },
   },
   {
     label: 'binary STL',
     expectedName: /Open another model.*format-triangle-binary\.stl/,
-    files: { name: 'format-triangle-binary.stl', mimeType: 'model/stl', buffer: binaryStlTriangle() },
+    files: {
+      name: 'format-triangle-binary.stl',
+      mimeType: 'model/stl',
+      buffer: binaryStlTriangle(),
+    },
   },
   {
     label: 'binary little-endian PLY with vertex colors',
     expectedName: /Open another model.*format-triangle-binary\.ply/,
-    files: { name: 'format-triangle-binary.ply', mimeType: 'application/octet-stream', buffer: binaryPlyTriangle() },
+    files: {
+      name: 'format-triangle-binary.ply',
+      mimeType: 'application/octet-stream',
+      buffer: binaryPlyTriangle(),
+    },
   },
   {
     label: 'OBJ with MTL companion',
     expectedName: /Open another model.*format-triangle\.obj/,
     files: [
-      { name: 'format-triangle.obj', mimeType: 'text/plain', buffer: Buffer.from('mtllib format-triangle.mtl\no Triangle\nusemtl TestRed\nv 0 0 0\nv 10 0 0\nv 0 10 0\nf 1 2 3') },
-      { name: 'format-triangle.mtl', mimeType: 'text/plain', buffer: Buffer.from('newmtl TestRed\nKd 0.8 0.1 0.1\nNs 32') },
+      {
+        name: 'format-triangle.obj',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('mtllib format-triangle.mtl\no Triangle\nusemtl TestRed\nv 0 0 0\nv 10 0 0\nv 0 10 0\nf 1 2 3'),
+      },
+      {
+        name: 'format-triangle.mtl',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('newmtl TestRed\nKd 0.8 0.1 0.1\nNs 32'),
+      },
     ],
   },
   {
     label: '3MF package',
     expectedName: /Open another model.*format-triangle\.3mf/,
-    files: { name: 'format-triangle.3mf', mimeType: 'model/3mf', buffer: minimalThreeMf() },
+    files: {
+      name: 'format-triangle.3mf',
+      mimeType: 'model/3mf',
+      buffer: minimalThreeMf(),
+    },
   },
 ];
 
@@ -282,9 +337,47 @@ test('empty viewer presents one clear local-file action', async ({ page }) => {
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
   await page.setViewportSize({ width: 800, height: 600 });
   const compactSettingsDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Settings' }) });
+  await expect(compactSettingsDialog).toHaveAttribute('data-side', 'bottom');
+  const compactSettingsScroll = compactSettingsDialog.getByTestId('responsive-panel-scroll');
+  await expect.poll(() => compactSettingsScroll.evaluate((element) => (
+    element.getBoundingClientRect().bottom
+  ))).toBeLessThanOrEqual(600);
+  const compactSettingsMetrics = await compactSettingsScroll.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      bottom: bounds.bottom,
+      clientHeight: element.clientHeight,
+      overflowY: getComputedStyle(element).overflowY,
+      scrollHeight: element.scrollHeight,
+      top: bounds.top,
+    };
+  });
+  expect(compactSettingsMetrics.top).toBeGreaterThanOrEqual(0);
+  expect(compactSettingsMetrics.bottom).toBeLessThanOrEqual(600);
+  expect(compactSettingsMetrics.overflowY).toBe('auto');
+  expect(compactSettingsMetrics.scrollHeight).toBeGreaterThan(compactSettingsMetrics.clientHeight);
+  await compactSettingsScroll.evaluate((element) => { element.scrollTop = 0; });
+  await compactSettingsScroll.hover({ position: { x: 20, y: 40 } });
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => compactSettingsScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   const compactAboutTrigger = compactSettingsDialog.getByRole('button', { name: 'About Kea3D' });
   await compactAboutTrigger.scrollIntoViewIfNeeded();
+  if (await compactAboutTrigger.getAttribute('aria-expanded') === 'true') {
+    await compactAboutTrigger.click();
+    await expect(compactAboutTrigger).toHaveAttribute('aria-expanded', 'false');
+  }
+  const scrollHeightBeforeAbout = await compactSettingsScroll.evaluate((element) => element.scrollHeight);
   await compactAboutTrigger.click();
+  await expect(compactAboutTrigger).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => compactSettingsScroll.evaluate((element) => element.scrollHeight)).toBeGreaterThan(scrollHeightBeforeAbout + 250);
+  const compactAboutCopy = compactSettingsDialog.getByText('No separately licensed Pro features are included.');
+  await expect.poll(async () => {
+    await compactSettingsScroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    return compactAboutCopy.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top >= 0 && bounds.bottom <= globalThis.innerHeight;
+    });
+  }).toBe(true);
   const compactLicenseButton = compactSettingsDialog.getByRole('button', { name: 'Core license' });
   await compactLicenseButton.scrollIntoViewIfNeeded();
   await compactLicenseButton.click();
@@ -299,6 +392,13 @@ test('empty viewer presents one clear local-file action', async ({ page }) => {
   expect(compactMetrics.scrollHeight).toBeGreaterThan(compactMetrics.clientHeight);
   await compactLicenseDialog.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByText('No separately licensed Pro features are included.')).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 480 });
+  const phoneBounds = await compactSettingsDialog.boundingBox();
+  expect(phoneBounds).not.toBeNull();
+  expect(phoneBounds!.y).toBeGreaterThanOrEqual(0);
+  expect(phoneBounds!.y + phoneBounds!.height).toBeLessThanOrEqual(480);
+  await compactSettingsDialog.getByRole('button', { name: 'Close' }).click();
+  await expect(compactSettingsDialog).toBeHidden();
 });
 
 test('embedded GLB textures load under the application content security policy', async ({ page }) => {
@@ -358,6 +458,61 @@ for (const formatCase of meshFormatCases) {
     await expect(page.getByText('The model does not contain renderable triangle geometry.')).toHaveCount(0);
   });
 }
+
+test('nested GLTF companion paths resolve relative to the selected main file', async ({ page }) => {
+  const model = externalTriangleModel();
+  await page.goto('/');
+  const selectedPaths = await page.locator('input[type="file"]').first().evaluate((input, payload) => {
+    const transfer = new DataTransfer();
+    for (const entry of payload) {
+      const bytes = Uint8Array.from(atob(entry.base64), (character) => character.charCodeAt(0));
+      const selectedFile = new File([bytes], entry.name, { type: entry.mimeType });
+      transfer.items.add(selectedFile);
+      const transferredFile = transfer.files.item(transfer.files.length - 1);
+      if (!transferredFile) throw new Error('The browser did not retain the selected test file.');
+      Object.defineProperty(transferredFile, 'webkitRelativePath', { value: entry.relativePath });
+    }
+    (input as HTMLInputElement).files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return Array.from(transfer.files, (file) => file.webkitRelativePath);
+  }, [
+    {
+      name: 'model.gltf',
+      relativePath: 'product/models/car/model.gltf',
+      mimeType: 'model/gltf+json',
+      base64: model.gltf.toString('base64'),
+    },
+    {
+      name: 'geometry.bin',
+      relativePath: 'product/models/shared/geometry.bin',
+      mimeType: 'application/octet-stream',
+      base64: model.binary.toString('base64'),
+    },
+    {
+      name: 'geometry.bin',
+      relativePath: 'product/variants/geometry.bin',
+      mimeType: 'application/octet-stream',
+      base64: Buffer.alloc(model.binary.byteLength).toString('base64'),
+    },
+  ]);
+
+  expect(selectedPaths).toEqual([
+    'product/models/car/model.gltf',
+    'product/models/shared/geometry.bin',
+    'product/variants/geometry.bin',
+  ]);
+  await expect(page.getByRole('button', { name: /Open another model.*model\.gltf/ })).toBeVisible();
+  await expect(page.getByText('More than one selected companion file')).toHaveCount(0);
+});
+
+test('STEP passes the production WebAssembly import gate', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('input[type="file"]').first().setInputFiles(
+    resolve('node_modules/occt-import-js/test/testfiles/simple-basic-cube/cube.stp'),
+  );
+  await expect(page.getByRole('button', { name: /Open another model.*cube\.stp/ })).toBeVisible();
+  await expect(page.getByText('The model does not contain renderable triangle geometry.')).toHaveCount(0);
+});
 
 test('web project folder selection preserves relative paths and opens its manifest', async ({ page }) => {
   await page.goto('/');
@@ -580,6 +735,13 @@ test('authored Anchors remain inspectable and have explicit viewport visibility 
   });
   await expect(page.getByRole('button', { name: /Open another model.*anchored-part\.glb/ })).toBeVisible();
 
+  const toolbar = page.getByRole('toolbar', { name: 'Viewer tools' });
+  const anchorToggle = toolbar.getByRole('button', { name: 'Hide anchors' });
+  await expect(anchorToggle).toHaveAttribute('aria-pressed', 'true');
+  await anchorToggle.click();
+  await expect(toolbar.getByRole('button', { name: 'Show anchors' })).toHaveAttribute('aria-pressed', 'false');
+  await toolbar.getByRole('button', { name: 'Show anchors' }).click();
+
   const closeSceneObjects = page.getByRole('button', { name: 'Close scene objects' });
   if (!await closeSceneObjects.isVisible()) {
     await page.getByRole('toolbar', { name: 'Viewer tools' }).getByRole('button', { name: 'Scene objects' }).click();
@@ -599,7 +761,25 @@ test('authored Anchors remain inspectable and have explicit viewport visibility 
   await expectNoAccessibilityViolations(page);
 });
 
-test('manual Anchors create, edit, undo, redo, and survive GLB export', async ({ page }) => {
+test('legacy named locator nodes become standard inspectable Anchors', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto('/');
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: 'legacy-locators.glb',
+    mimeType: 'model/gltf-binary',
+    buffer: triangleModel(false, false, [{ id: 'PB_LT_01', x: 0.25, legacy: true }]),
+  });
+
+  const toolbar = page.getByRole('toolbar', { name: 'Viewer tools' });
+  await expect(toolbar.getByRole('button', { name: 'Hide anchors' })).toBeVisible();
+  const closeSceneObjects = page.getByRole('button', { name: 'Close scene objects' });
+  if (!await closeSceneObjects.isVisible()) await toolbar.getByRole('button', { name: 'Scene objects' }).click();
+  const sceneObjects = closeSceneObjects.locator('xpath=ancestor::div[@data-slot="card"]');
+  await expect(sceneObjects.getByText('1 frame in this model')).toBeVisible();
+  await expect(sceneObjects.getByRole('button', { name: 'PB_LT_01', exact: true })).toBeVisible();
+});
+
+test('manual Anchors create, edit, undo, redo, and survive calibrated GLB export', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
   await openTestModel(page);
@@ -636,6 +816,12 @@ test('manual Anchors create, edit, undo, redo, and survive GLB export', async ({
   await sceneObjects.getByRole('button', { name: 'Revert scene change' }).click();
   await expect(sceneObjects.getByRole('button', { name: 'Mount face', exact: true })).toBeVisible();
 
+  await page.getByRole('toolbar', { name: 'Viewer tools' }).getByRole('button', { name: 'Adjust model' }).click();
+  const unitSelect = page.getByRole('combobox', { name: 'Source units' });
+  await unitSelect.click();
+  await page.getByRole('option', { name: 'Inches (in)' }).click();
+  await page.getByRole('button', { name: 'Close adjust model' }).click();
+
   await page.getByRole('toolbar', { name: 'Viewer tools' }).getByRole('button', { name: 'Export model' }).click();
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export GLB' }).click();
@@ -645,6 +831,7 @@ test('manual Anchors create, edit, undo, redo, and survive GLB export', async ({
   const anchorNode = (exported.nodes as Array<{ name?: string; translation?: number[]; extras?: unknown }>).find((node) => node.name === 'Mount face');
   expect(anchorNode?.translation).toEqual([1, 2, 3]);
   expect(anchorNode?.extras).toEqual({ kea3d: { anchor: { version: 1, id: 'mount-face' } } });
+  expect((exported.nodes as Array<{ scale?: number[] }>).some((node) => node.scale?.every((value) => Math.abs(value - 0.0254) < 1e-6))).toBe(true);
 
   await page.locator('input[type="file"]').first().setInputFiles({
     name: 'authored-anchor.glb',
@@ -652,6 +839,9 @@ test('manual Anchors create, edit, undo, redo, and survive GLB export', async ({
     buffer: await readFile(exportedPath!),
   });
   await expect(page.getByRole('button', { name: /Open another model.*authored-anchor\.glb/ })).toBeVisible();
+  if (!await closeSceneObjects.isVisible()) {
+    await page.getByRole('toolbar', { name: 'Viewer tools' }).getByRole('button', { name: 'Scene objects' }).click();
+  }
   await expect(page.getByText('1 frame in this model')).toBeVisible();
   await expectNoAccessibilityViolations(page);
 });
@@ -1050,6 +1240,22 @@ test('compact more tools uses a small non-modal icon grid', async ({ page }) => 
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
   }
   await expect(page.locator('canvas[aria-label="3D model viewport"]')).toBeVisible();
+});
+
+test('compact anchor visibility stays available in the conditional icon grid', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 600 });
+  await page.goto('/');
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: 'mobile-anchor.glb',
+    mimeType: 'model/gltf-binary',
+    buffer: triangleModel(false, false, [{ id: 'base', x: 0.25 }]),
+  });
+  const toolbar = page.getByRole('toolbar', { name: 'Mobile viewer tools' });
+  await toolbar.getByRole('button', { name: 'More tools' }).click();
+  const overflow = page.getByRole('toolbar', { name: 'More viewer tools' });
+  await overflow.getByRole('button', { name: 'Hide anchors' }).click();
+  await toolbar.getByRole('button', { name: 'More tools' }).click();
+  await expect(page.getByRole('toolbar', { name: 'More viewer tools' }).getByRole('button', { name: 'Show anchors' })).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('compact Escape closes the active layer before clearing model selection', async ({ page }) => {

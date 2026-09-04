@@ -1,5 +1,10 @@
 #include <BRepBndLib.hxx>
+#if __has_include(<BRepLib_ToolTriangulatedShape.hxx>)
 #include <BRepLib_ToolTriangulatedShape.hxx>
+#define KEA3D_HAS_BREP_NORMAL_TOOL
+#else
+#include <StdPrs_ToolTriangulatedShape.hxx>
+#endif
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -19,6 +24,7 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
+#include <NCollection_DataMap.hxx>
 #include <XCAFApp_Application.hxx>
 #include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
@@ -26,7 +32,9 @@
 #include <XCAFPrs.hxx>
 #include <XCAFPrs_IndexedDataMapOfShapeStyle.hxx>
 
+#ifdef _WIN32
 #include "thumbnail_renderer.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -46,19 +54,22 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
+#ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#endif
 
 namespace {
 
 constexpr std::uint16_t protocol_version = 1;
 constexpr std::uint64_t max_manifest_bytes = 8ULL * 1024ULL * 1024ULL;
 constexpr std::uint64_t max_mesh_batch_bytes = 64ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
 constexpr std::size_t max_thumbnail_triangles = 1'000'000;
 constexpr unsigned thumbnail_edge = 512;
+#endif
 
 std::atomic_bool cancel_requested{false};
 
@@ -88,9 +99,9 @@ struct ResolvedFaceColor {
 };
 
 using ResolvedFaceColors =
-  std::unordered_map<TopoDS_Shape, ResolvedFaceColor, TopTools_ShapeMapHasher,
-                     TopTools_ShapeMapHasher>;
+  NCollection_DataMap<TopoDS_Shape, ResolvedFaceColor, TopTools_ShapeMapHasher>;
 
+#ifdef _WIN32
 std::uint64_t thumbnail_hash(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) return 0;
@@ -184,6 +195,7 @@ void write_thumbnail_cache(const std::filesystem::path& input,
   std::filesystem::rename(temporary, destination, error);
   if (error) std::filesystem::remove(temporary, error);
 }
+#endif
 
 class CancelIndicator final : public Message_ProgressIndicator {
 protected:
@@ -194,6 +206,7 @@ protected:
   void Show(const Message_ProgressScope&, const Standard_Boolean) override {}
 };
 
+#ifdef _WIN32
 std::string wide_to_utf8(const std::wstring_view value) {
   if (value.empty()) return {};
   const std::wstring terminated(value);
@@ -204,6 +217,16 @@ std::string wide_to_utf8(const std::wstring_view value) {
   extended.ToUTF8CString(buffer);
   return utf8.data();
 }
+#endif
+
+std::string path_to_utf8(const std::filesystem::path& path) {
+#ifdef _WIN32
+  return wide_to_utf8(path.wstring());
+#else
+  const std::u8string value = path.u8string();
+  return {reinterpret_cast<const char*>(value.data()), value.size()};
+#endif
+}
 
 bool valid_session_id(const std::string_view value) {
   return !value.empty() && value.size() <= 64 &&
@@ -212,6 +235,7 @@ bool valid_session_id(const std::string_view value) {
          });
 }
 
+#ifdef _WIN32
 std::optional<Arguments> parse_arguments(const int argc, wchar_t** argv) {
   std::optional<std::wstring> protocol;
   std::optional<std::wstring> session;
@@ -238,6 +262,34 @@ std::optional<Arguments> parse_arguments(const int argc, wchar_t** argv) {
   if (filesystem_error) return std::nullopt;
   return Arguments{session_utf8, canonical};
 }
+#else
+std::optional<Arguments> parse_arguments(const int argc, char** argv) {
+  std::optional<std::string> protocol;
+  std::optional<std::string> session;
+  std::optional<std::filesystem::path> input;
+  for (int index = 1; index + 1 < argc; index += 2) {
+    const std::string_view option(argv[index]);
+    if (option == "--protocol") protocol = argv[index + 1];
+    else if (option == "--session") session = argv[index + 1];
+    else if (option == "--input") input = std::filesystem::path(argv[index + 1]);
+    else return std::nullopt;
+  }
+  if (argc != 7 || protocol != "1" || !session || !input) return std::nullopt;
+  std::error_code filesystem_error;
+  if (!valid_session_id(*session) ||
+      !std::filesystem::is_regular_file(*input, filesystem_error) || filesystem_error) {
+    return std::nullopt;
+  }
+  std::string extension = path_to_utf8(input->extension());
+  std::transform(extension.begin(), extension.end(), extension.begin(), [](const unsigned char value) {
+    return static_cast<char>(std::tolower(value));
+  });
+  if (extension != ".step" && extension != ".stp") return std::nullopt;
+  const std::filesystem::path canonical = std::filesystem::weakly_canonical(*input, filesystem_error);
+  if (filesystem_error) return std::nullopt;
+  return Arguments{*session, canonical};
+}
+#endif
 
 std::string json_escape(const std::string_view value) {
   std::ostringstream output;
@@ -302,11 +354,10 @@ int color_specificity(const TopAbs_ShapeEnum type) {
 
 void assign_face_color(ResolvedFaceColors& resolved, const TopoDS_Shape& face,
                        const std::array<float, 4>& color, const int specificity) {
-  const auto existing = resolved.find(face);
-  if (existing == resolved.end()) {
-    resolved.emplace(face, ResolvedFaceColor{color, specificity});
-  } else if (specificity <= existing->second.specificity) {
-    existing->second = ResolvedFaceColor{color, specificity};
+  if (!resolved.IsBound(face)) {
+    resolved.Bind(face, ResolvedFaceColor{color, specificity});
+  } else if (specificity <= resolved.Find(face).specificity) {
+    resolved.ChangeFind(face) = ResolvedFaceColor{color, specificity};
   }
 }
 
@@ -338,12 +389,11 @@ ResolvedFaceColors collect_face_colors(const TDF_Label& root) {
 
 bool face_color(const ResolvedFaceColors& colors, const TopoDS_Face& face,
                 std::array<float, 4>& value) {
-  const auto found = colors.find(face);
-  if (found == colors.end()) {
+  if (!colors.IsBound(face)) {
     value = {0.72F, 0.76F, 0.82F, 1.0F};
     return false;
   }
-  value = found->second.value;
+  value = colors.Find(face).value;
   return true;
 }
 
@@ -365,7 +415,11 @@ std::optional<MeshBatch> extract_shell_mesh(const TopoDS_Shape& shell,
     if (triangulation.IsNull() || triangulation->NbNodes() <= 0 || triangulation->NbTriangles() <= 0) {
       continue;
     }
+#ifdef KEA3D_HAS_BREP_NORMAL_TOOL
     BRepLib_ToolTriangulatedShape::ComputeNormals(face, triangulation);
+#else
+    StdPrs_ToolTriangulatedShape::ComputeNormals(face, triangulation);
+#endif
 
     const gp_Trsf transform = location.Transformation();
     const bool reversed = face.Orientation() == TopAbs_REVERSED;
@@ -565,11 +619,15 @@ void monitor_commands(const Arguments& arguments) {
 
 }  // namespace
 
+#ifdef _WIN32
 int wmain(const int argc, wchar_t** argv) {
   if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
     std::cerr << "Could not configure the CAD protocol output stream.\n";
     return 1;
   }
+#else
+int main(const int argc, char** argv) {
+#endif
   std::ios::sync_with_stdio(false);
   std::cout.exceptions(std::ios::badbit | std::ios::failbit);
 
@@ -583,7 +641,7 @@ int wmain(const int argc, wchar_t** argv) {
   std::uint64_t sequence = 1;
 
   try {
-    const std::string input_utf8 = wide_to_utf8(arguments.input.wstring());
+    const std::string input_utf8 = path_to_utf8(arguments.input);
     if (input_utf8.empty()) terminal(arguments, sequence, "failure", "The STEP path is not valid UTF-8.", 1);
 
     const Handle(XCAFApp_Application) application = XCAFApp_Application::GetApplication();
@@ -625,7 +683,7 @@ int wmain(const int argc, wchar_t** argv) {
     }
     const std::string source_name = label_name(root);
     const std::string display_name = source_name.empty()
-      ? wide_to_utf8(arguments.input.stem().wstring()) : source_name;
+      ? path_to_utf8(arguments.input.stem()) : source_name;
     const std::string manifest =
       "{\"schema\":\"kea3d-cad-manifest-v1\",\"rootId\":\"root\",\"nodes\":[{\"id\":\"root\","
       "\"parentId\":null,\"sourceName\":" +
@@ -640,8 +698,10 @@ int wmain(const int argc, wchar_t** argv) {
                 ",\"type\":\"manifest\",\"rootCount\":1,\"shellCount\":" +
                 std::to_string(shells.size()) + '}', manifest_payload);
 
+#ifdef _WIN32
     std::vector<kea3d::CadThumbnailTriangle> thumbnail_triangles;
     thumbnail_triangles.reserve(std::min<std::size_t>(max_thumbnail_triangles, 250'000));
+#endif
     std::size_t emitted_shells = 0;
     std::size_t skipped_shells = 0;
     for (std::size_t index = 0; index < shells.size(); ++index) {
@@ -667,7 +727,9 @@ int wmain(const int argc, wchar_t** argv) {
         write_progress(arguments, sequence, "tessellating", index + 1, shells.size());
         continue;
       }
+#ifdef _WIN32
       append_thumbnail_triangles(*batch, thumbnail_triangles);
+#endif
       const std::vector<std::uint8_t> payload = encode_mesh(*batch);
       if (payload.size() > max_mesh_batch_bytes) {
         ++skipped_shells;
@@ -690,7 +752,9 @@ int wmain(const int argc, wchar_t** argv) {
     if (emitted_shells == 0) {
       terminal(arguments, sequence, "failure", "OpenCascade could not tessellate any STEP shells.", 1);
     }
+#ifdef _WIN32
     write_thumbnail_cache(arguments.input, thumbnail_triangles);
+#endif
     const std::string warning = skipped_shells == 0
       ? std::string()
       : "Opened with " + std::to_string(skipped_shells) + " of " +

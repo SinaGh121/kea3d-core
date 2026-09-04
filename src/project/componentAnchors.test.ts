@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Group } from 'three';
-import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, validateAnchorEditInput, type AnchorEditInput } from './componentAnchors';
+import { Group, Mesh } from 'three';
+import { CommandHistory } from '../commandHistory';
+import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, isAnchorObject, promoteLegacyNamedAnchors, validateAnchorEditInput, type AnchorEditInput } from './componentAnchors';
 
 function anchor(id: string, name = ''): Group {
   const object = new Group();
@@ -10,6 +11,49 @@ function anchor(id: string, name = ''): Group {
 }
 
 describe('component anchor catalog', () => {
+  it('preserves additional Anchor metadata through editing, undo, and redo', () => {
+    const object = anchor('mount');
+    object.userData.kea3d.anchor.metadata = { description: 'Keep me', tags: ['mount'] };
+    object.userData.kea3d.anchor.extension = { vendor: 'example' };
+    const before: AnchorEditInput = { id: 'mount', name: 'Mount', position: [0, 0, 0], rotation: [0, 0, 0] };
+    const after: AnchorEditInput = { ...before, id: 'renamed', name: 'Renamed', position: [1, 2, 3] };
+    const history = new CommandHistory();
+    history.execute({ label: 'Edit Anchor', apply: () => applyAnchorEdit(object, after), revert: () => applyAnchorEdit(object, before) });
+    for (const action of [() => {}, () => history.undo(), () => history.redo()]) {
+      action();
+      expect(object.userData.kea3d.anchor.metadata).toEqual({ description: 'Keep me', tags: ['mount'] });
+      expect(object.userData.kea3d.anchor.extension).toEqual({ vendor: 'example' });
+    }
+    expect(object.userData.kea3d.anchor.id).toBe('renamed');
+  });
+
+  it('allows inherited calibration in the viewer but keeps local Anchor and assembly scale validation', () => {
+    const root = new Group();
+    root.scale.setScalar(2.54);
+    const mount = anchor('mount');
+    mount.position.x = 1;
+    root.add(mount);
+    expect(discoverComponentAnchorDetails(root, 'scaled.glb', { allowInheritedScale: true })[0].position[0]).toBeCloseTo(2.54);
+    expect(() => discoverComponentAnchorDetails(root, 'assembly')).toThrow('must not contain scale');
+    mount.scale.setScalar(0.001);
+    expect(() => discoverComponentAnchorDetails(root, 'scaled.glb', { allowInheritedScale: true })).toThrow('must not contain scale');
+  });
+
+  it('does not promote invalid legacy candidates or reject ordinary scaled empties', () => {
+    const root = new Group();
+    const scaled = new Group();
+    scaled.name = 'AB_CD_01';
+    scaled.scale.setScalar(0.001);
+    const invalid = new Group();
+    invalid.name = 'AB_CD_02';
+    invalid.position.x = Number.NaN;
+    root.add(scaled, invalid);
+    expect(promoteLegacyNamedAnchors(root, { allowInheritedScale: true })).toBe(0);
+    expect(discoverComponentAnchorDetails(root, 'ordinary.glb')).toEqual([]);
+    expect(scaled.userData).toEqual({});
+    expect(invalid.userData).toEqual({});
+  });
+
   it('discovers stable IDs, display names, parents, and component-space transforms', () => {
     const root = new Group();
     root.name = 'Motor';
@@ -60,5 +104,26 @@ describe('component anchor catalog', () => {
     expect(() => validateAnchorEditInput(valid, ['base'])).toThrow('already used');
     expect(() => validateAnchorEditInput({ ...valid, id: '1-base' }, [])).toThrow('must start');
     expect(() => validateAnchorEditInput({ ...valid, position: [Number.NaN, 0, 0] }, [])).toThrow('finite');
+  });
+
+  it('promotes only legacy engineering locator leaves into versioned Anchors', () => {
+    const root = new Group();
+    const locator = new Group();
+    locator.name = 'PB_LT_01';
+    locator.userData = { source: 'legacy' };
+    const ordinaryLeaf = new Group();
+    ordinaryLeaf.name = 'Wheel mount';
+    const hierarchy = new Group();
+    hierarchy.name = 'PB_RT_02';
+    hierarchy.add(ordinaryLeaf);
+    const mesh = new Mesh();
+    mesh.name = 'LV_MP_03';
+    root.add(locator, hierarchy, mesh);
+
+    expect(promoteLegacyNamedAnchors(root)).toBe(1);
+    expect(locator.userData).toEqual({ source: 'legacy', kea3d: { anchor: { version: 1, id: 'PB_LT_01' } } });
+    expect(discoverComponentAnchorDetails(root, 'legacy.glb')).toHaveLength(1);
+    expect(isAnchorObject(hierarchy)).toBe(false);
+    expect(isAnchorObject(mesh)).toBe(false);
   });
 });

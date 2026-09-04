@@ -22,7 +22,7 @@ export async function loadGltfFiles(
   const mainFile = files.find((file) => supportedMainExtensions.has(fileExtension(file.name)));
   if (!mainFile) throw new Error('Choose a .glb or .gltf file.');
 
-  const { manager, dispose } = createLocalFileManager(files, onProgress);
+  const { manager, dispose } = createLocalFileManager(files, onProgress, mainFile);
 
   try {
     const buffer = await readFileBuffer(mainFile, onProgress, signal);

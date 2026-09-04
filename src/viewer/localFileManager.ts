@@ -2,26 +2,45 @@ import { LoadingManager } from 'three';
 import type { LoadProgress } from './types';
 
 function normalizePath(path: string): string {
-  let decodedPath = path;
-  try {
-    decodedPath = decodeURIComponent(path);
-  } catch {
-    // Keep an invalid URL unresolved instead of failing the entire loader setup.
-  }
-  return decodedPath
+  const segments: string[] = [];
+  for (const segment of path
     .replaceAll('\\', '/')
     .replace(/^\.\//, '')
-    .split(/[?#]/, 1)[0]
-    .toLowerCase();
+    .toLowerCase()
+    .split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (segments.length > 0 && segments.at(-1) !== '..') segments.pop();
+      else segments.push(segment);
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join('/');
 }
 
 function basename(path: string): string {
   return path.split('/').pop() ?? path;
 }
 
-export function createLocalFileResolver(files: readonly File[]): (url: string) => File | undefined {
+function directory(path: string): string {
+  const separator = path.lastIndexOf('/');
+  return separator < 0 ? '' : path.slice(0, separator);
+}
+
+function isExternalUrl(url: string): boolean {
+  return /^(?:[a-z][a-z\d+.-]*:|\/\/|\/)/i.test(url.trim());
+}
+
+export function createLocalFileResolver(
+  files: readonly File[],
+  mainFile?: File,
+): (url: string) => File | undefined {
   const pathToFile = new Map<string, File>();
   const basenameToFile = new Map<string, File | null>();
+  const mainDirectory = mainFile
+    ? directory(normalizePath(mainFile.webkitRelativePath || mainFile.name))
+    : '';
 
   for (const file of files) {
     const relativePath = normalizePath(file.webkitRelativePath || file.name);
@@ -36,8 +55,18 @@ export function createLocalFileResolver(files: readonly File[]): (url: string) =
   }
 
   return (url) => {
-    const normalized = normalizePath(url);
-    const exactMatch = pathToFile.get(normalized);
+    if (isExternalUrl(url)) return undefined;
+    let path = url.split(/[?#]/, 1)[0];
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      // Leave malformed encoding unchanged; literal file paths are never decoded.
+    }
+    const normalized = normalizePath(path);
+    const relativeToMain = mainDirectory
+      ? normalizePath(`${mainDirectory}/${normalized}`)
+      : normalized;
+    const exactMatch = pathToFile.get(relativeToMain) ?? pathToFile.get(normalized);
     if (exactMatch) return exactMatch;
 
     const shortName = basename(normalized);
@@ -50,10 +79,11 @@ export function createLocalFileResolver(files: readonly File[]): (url: string) =
 export function createLocalFileManager(
   files: readonly File[],
   onProgress: (progress: LoadProgress) => void,
+  mainFile?: File,
 ): { manager: LoadingManager; dispose: () => void } {
   const manager = new LoadingManager();
   const objectUrls = new Map<File, string>();
-  const resolveLocalFile = createLocalFileResolver(files);
+  const resolveLocalFile = createLocalFileResolver(files, mainFile);
 
   manager.setURLModifier((url) => {
     const file = resolveLocalFile(url);

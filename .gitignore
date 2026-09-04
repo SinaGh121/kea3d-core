@@ -5,6 +5,8 @@ release/
 public/vendor/three/
 src-tauri/target/
 native/cad-worker/build/
+native/cad-worker/build-linux/
+native/cad-worker/bin/
 native/thumbnail-provider/build/
 .vite/
 *.tsbuildinfo

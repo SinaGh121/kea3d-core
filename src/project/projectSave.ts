@@ -105,10 +105,13 @@ export async function saveProjectSession({
     link.download = suggestedName;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-    return { cancelled: false, session, message: 'Project downloaded' };
+    return { cancelled: false, session, message: 'Manifest downloaded. Keep it beside its component folders, or use Pack project to move it.' };
   }
 
-  let destination = saveAs || !desktopNativeShell ? null : sourcePath;
+  if (!desktopNativeShell || !sourcePath) {
+    throw new Error('The original project folder cannot be verified. Use Pack project to save a self-contained copy.');
+  }
+  let destination = saveAs ? null : sourcePath;
   if (!destination) {
     const { save } = await import('@tauri-apps/plugin-dialog');
     destination = await save({
@@ -121,7 +124,7 @@ export async function saveProjectSession({
   const bytes = new TextEncoder().encode(text);
   if (desktopNativeShell) {
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('save_project_file_atomic', { path: destination, contents: Array.from(bytes) });
+    await invoke('save_project_file_atomic', { path: destination, sourcePath, contents: Array.from(bytes) });
   } else {
     const { writeFile } = await import('@tauri-apps/plugin-fs');
     await writeFile(destination, bytes);
