@@ -1,0 +1,8 @@
+{
+  "ImporterCommit": "c2148e54b456b571238d35cac037d304053d64b2",
+  "OpenCascadeCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
+  "Emscripten": "3.1.69",
+  "ModifiedSourceSha256": "c16821675dae35a6778b762556f524f3211d2506318dbebea3a37b04878ac31c",
+  "JavaScriptSha256": "3fb44ce11d00611f9b3f3c5775d520ebab48930c1f08279b7b1316f05f0d3379",
+  "WasmSha256": "fd0bddc47881b99c7c989c0000a05d898272d842b2e6fb6d82a30212e655844a"
+}
