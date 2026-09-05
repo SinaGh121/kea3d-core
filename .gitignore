@@ -1,0 +1,24 @@
+node_modules/
+dist/
+!vendor/cad-wasm/dist/
+!vendor/cad-wasm/dist/occt-import-js.js
+!vendor/cad-wasm/dist/occt-import-js.wasm
+artifacts/
+release/
+public/vendor/three/
+src-tauri/target/
+native/cad-worker/build/
+native/cad-worker/build-linux/
+native/cad-worker/bin/
+native/thumbnail-provider/build/
+.vite/
+*.tsbuildinfo
+*.log
+playwright-report/
+test-results/
+tmp/
+.DS_Store
+
+# Keep local model fixtures out of public commits until their licenses are documented.
+samples/*
+!samples/README.md

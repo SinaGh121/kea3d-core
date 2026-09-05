@@ -1,0 +1,9 @@
+{
+  "name": "@kea3d/cad-wasm",
+  "version": "0.0.23-kea3d.1",
+  "private": true,
+  "license": "LGPL-2.1",
+  "main": "dist/occt-import-js.js",
+  "browser": { "fs": false },
+  "files": ["dist", "LICENSE.txt", "OCCT-LICENSE.txt", "OCCT-EXCEPTION.txt"]
+}
