@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(kea3d_color_fixture LANGUAGES CXX)
+find_package(OpenCASCADE REQUIRED COMPONENTS FoundationClasses ModelingData ModelingAlgorithms ApplicationFramework DataExchange)
+add_executable(kea3d-color-fixture main.cpp)
+target_compile_features(kea3d-color-fixture PRIVATE cxx_std_17)
+target_include_directories(kea3d-color-fixture PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+target_link_directories(kea3d-color-fixture PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+target_link_libraries(kea3d-color-fixture PRIVATE ${OpenCASCADE_LIBRARIES})
