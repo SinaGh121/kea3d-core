@@ -1,0 +1,19 @@
+node_modules/
+dist/
+artifacts/
+release/
+public/vendor/three/
+src-tauri/target/
+native/cad-worker/build/
+native/thumbnail-provider/build/
+.vite/
+*.tsbuildinfo
+*.log
+playwright-report/
+test-results/
+tmp/
+.DS_Store
+
+# Keep local model fixtures out of public commits until their licenses are documented.
+samples/*
+!samples/README.md
