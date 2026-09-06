@@ -1,0 +1,13 @@
+{
+  "$schema": "https://kea3d.com/schemas/project/v1.json",
+  "format": "kea3d-project",
+  "version": 1,
+  "name": "Animated fixture project",
+  "rootInstance": "cube",
+  "resources": [
+    { "id": "cube-model", "uri": "AnimatedMorphCube.glb" }
+  ],
+  "instances": [
+    { "id": "cube", "resource": "cube-model" }
+  ]
+}
