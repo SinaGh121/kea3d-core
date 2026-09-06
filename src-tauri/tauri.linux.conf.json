@@ -1,0 +1,9 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "targets": ["appimage"],
+    "externalBin": [
+      "../native/cad-worker/bin/kea3d-cad-worker"
+    ]
+  }
+}
