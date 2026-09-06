@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest';
+import { Group, Mesh, BoxGeometry, MeshBasicMaterial } from 'three';
+import { buildSceneTree } from './sceneTree';
+
+describe('buildSceneTree', () => {
+  it('keeps renderable hierarchy and gives unnamed parts readable labels', () => {
+    const root = new Group();
+    root.name = 'Assembly';
+    const empty = new Group();
+    const group = new Group();
+    group.name = 'Housing';
+    const mesh = new Mesh(new BoxGeometry(), new MeshBasicMaterial());
+    group.add(mesh);
+    root.add(empty, group);
+    const objects = new Map();
+
+    const tree = buildSceneTree(root, objects);
+
+    expect(tree[0].name).toBe('Assembly');
+    expect(tree[0].children).toHaveLength(1);
+    expect(tree[0].children[0].name).toBe('Housing');
+    expect(tree[0].children[0].children[0].name).toBe('Part 1');
+    expect(objects.has(mesh.uuid)).toBe(true);
+  });
+});
