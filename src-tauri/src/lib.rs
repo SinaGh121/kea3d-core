@@ -1443,7 +1443,8 @@ mod tests {
 
     #[test]
     fn opens_and_saves_v2_project_relative_components() {
-        let root = std::env::temp_dir().join(format!("kea3d-native-project-v2-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("kea3d-native-project-v2-{}", std::process::id()));
         std::fs::create_dir_all(root.join("components")).unwrap();
         std::fs::write(root.join("components/rail.glb"), b"glTF").unwrap();
         std::fs::write(root.join("components/carriage.glb"), b"glTF").unwrap();
@@ -1451,13 +1452,28 @@ mod tests {
         let document = br#"{"format":"kea3d-project","version":2,"resources":[{"id":"rail","uri":"components/rail.glb"},{"id":"carriage","uri":"components/carriage.glb"},{"id":"unsafe","uri":"../outside.glb"}],"instances":[{"resource":"rail"},{"resource":"carriage"},{"resource":"unsafe"}]}"#;
         std::fs::write(&manifest, document).unwrap();
         let state = NativeOpenState::default();
-        assert_eq!(enqueue_open_files(&state, [manifest.clone().into_os_string()], &std::env::temp_dir()), 3);
+        assert_eq!(
+            enqueue_open_files(
+                &state,
+                [manifest.clone().into_os_string()],
+                &std::env::temp_dir()
+            ),
+            3
+        );
         let pending = state.pending.lock().unwrap();
-        assert_eq!(pending[1].relative_path.as_deref(), Some("components/rail.glb"));
-        assert_eq!(pending[2].relative_path.as_deref(), Some("components/carriage.glb"));
+        assert_eq!(
+            pending[1].relative_path.as_deref(),
+            Some("components/rail.glb")
+        );
+        assert_eq!(
+            pending[2].relative_path.as_deref(),
+            Some("components/carriage.glb")
+        );
         assert!(validate_project_save(&manifest, document).is_ok());
         drop(pending);
-        let unsupported = String::from_utf8(document.to_vec()).unwrap().replace("\"version\":2", "\"version\":3");
+        let unsupported = String::from_utf8(document.to_vec())
+            .unwrap()
+            .replace("\"version\":2", "\"version\":3");
         std::fs::write(&manifest, &unsupported).unwrap();
         assert_eq!(selected_open_files(&state, manifest.clone()).len(), 1);
         assert!(validate_project_save(&manifest, unsupported.as_bytes()).is_err());
