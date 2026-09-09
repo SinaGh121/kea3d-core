@@ -1,5 +1,5 @@
 import type { AnimationClip, Object3D } from 'three';
-import type { LinearUnit, UpAxis } from './types';
+import type { ForwardAxis, LinearUnit, UpAxis } from './types';
 
 export interface PreparedModelSource {
   scene: Object3D;
@@ -7,6 +7,7 @@ export interface PreparedModelSource {
   totalSize: number;
   sourceUnit: LinearUnit;
   upAxis: UpAxis;
+  forwardAxis?: ForwardAxis;
 }
 
 const preparedModels = new WeakMap<File, PreparedModelSource>();

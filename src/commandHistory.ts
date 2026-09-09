@@ -1,5 +1,6 @@
 export interface ReversibleCommand {
   readonly label: string;
+  readonly affectsDocument?: boolean;
   apply(): void;
   revert(): void;
 }
@@ -29,7 +30,7 @@ export class CommandHistory<TCommand extends ReversibleCommand = ReversibleComma
   }
 
   recordApplied(command: TCommand): void {
-    const after = ++this.sequence;
+    const after = command.affectsDocument === false ? this.revision : ++this.sequence;
     this.undoStack.push({ command, before: this.revision, after });
     this.revision = after;
     if (this.undoStack.length > this.limit) this.undoStack.shift();

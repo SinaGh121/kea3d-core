@@ -14,7 +14,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Toaster } from '@/components/ui/sonner';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { sideWorkspaceWidth, useSideWorkspace } from '@/components/viewerLayout';
@@ -22,7 +22,6 @@ import { ViewerToolbar, type ViewerAction } from '@/components/ViewerToolbar';
 import { defaultAppSettings, loadAppSettings, parseAppSettingsJson, resolveThemePreference, saveAppSettings, serializeAppSettings, type AccentColor, type AppSettings, type DisplayUnitPreference, type ThemePreference, type ViewportBackground } from '@/settings';
 import type { Viewer } from '@/viewer/Viewer';
 import { calibrationMultiplier, linearUnitSymbols, metricDisplayForDimensions, metricDisplayForLength, sourceUnitConversionText, unitToMeters } from '@/viewer/linearUnits';
-import { defaultForwardAxis, forwardAxes, isForwardAxisCompatible } from '@/viewer/orientationAxes';
 import { isLoadCancellation, loadSizeNotice } from '@/viewer/loadControl';
 import { registerPreloadedFileBuffer } from '@/viewer/localFile';
 import { readAndroidContentUri, type AndroidNativeFileBridge } from '@/viewer/androidFileReader';
@@ -31,8 +30,8 @@ import { decodeSharedView, encodeSharedView } from '@/viewer/sharedView';
 import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, materialCategoryNames, materialPresets, type MaterialFinish, type MaterialPresetOptions, type MaterialTone } from '@/viewer/materialPresets';
 import { isNativeShell } from '@/nativeShell';
 import { useReleaseUpdates } from '@/project/useReleaseUpdates';
-import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, ForwardAxis, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
-import type { Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
+import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
+import type { Kea3dJoint, Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
 import type { AnchorEditInput } from '@/project/componentAnchors';
 import { createLoadMetricTracker, type LoadMetricStatus } from '@/performance/loadMetrics';
 import { searchScene, type SceneFilter } from '@/project/sceneSearch';
@@ -70,6 +69,7 @@ type ProjectResourceRecoveryState = { files: File[]; issues: ProjectResourceReco
 const windowsThumbnailPreferenceKey = 'kea3d.windows-thumbnails.preference.v1';
 const ProjectRecoveryPanel = lazy(() => import('@/project/ProjectRecoveryPanel'));
 const ProjectSaveControls = lazy(() => import('@/project/ProjectSaveControls'));
+const JointControls = lazy(() => import('@/project/JointControls'));
 const AnchorInspector = lazy(() => import('@/project/AnchorInspector'));
 const AboutContent = lazy(() => import('@/project/AboutContent'));
 
@@ -583,6 +583,7 @@ export default function App() {
   const [projection, setProjection] = useState<CameraProjection>(initialSettings.viewer.projection);
   const [rotationMode, setRotationMode] = useState<RotationMode>(initialSettings.viewer.rotationMode);
   const [viewSelectorVisible, setViewSelectorVisible] = useState(false);
+  const [orientationStep, setOrientationStep] = useState<'off' | 'top' | 'front' | 'preview'>('off');
   const [displayUnit, setDisplayUnit] = useState<DisplayUnitPreference>(initialSettings.viewer.displayUnit);
   const [restoreLastCamera, setRestoreLastCamera] = useState(initialSettings.viewer.restoreLastCamera);
   const [lastCamera, setLastCamera] = useState<CameraState | null>(initialSettings.viewer.lastCamera);
@@ -599,10 +600,6 @@ export default function App() {
   const [materialEditState, setMaterialEditState] = useState<MaterialEditState>(emptyMaterialEditState);
   const [sourceUnit, setSourceUnit] = useState<LinearUnit>('m');
   const [initialSourceUnit, setInitialSourceUnit] = useState<LinearUnit>('m');
-  const [upAxis, setUpAxis] = useState<UpAxis>('y');
-  const [initialUpAxis, setInitialUpAxis] = useState<UpAxis>('y');
-  const [forwardAxis, setForwardAxis] = useState<ForwardAxis>('z');
-  const [initialForwardAxis, setInitialForwardAxis] = useState<ForwardAxis>('z');
   const [calibrationScale, setCalibrationScale] = useState(1);
   const [calibrationAxis, setCalibrationAxis] = useState<'x' | 'y' | 'z'>('x');
   const [calibrationValue, setCalibrationValue] = useState('');
@@ -735,6 +732,7 @@ export default function App() {
       }, (visible) => {
         setViewSelectorVisible(visible);
       }, () => inspectRequestRef.current());
+      viewer.onOrientationStep = setOrientationStep;
       const appearance = appearanceRef.current;
       viewer.setTheme(appearance.theme);
       viewer.setAccentColor(accentHex(appearance.accent));
@@ -962,10 +960,6 @@ export default function App() {
       setExplodeFactor(0);
       setSourceUnit(loaded.initialSourceUnit);
       setInitialSourceUnit(loaded.initialSourceUnit);
-      setUpAxis(loaded.initialUpAxis);
-      setInitialUpAxis(loaded.initialUpAxis);
-      setForwardAxis(loaded.initialForwardAxis);
-      setInitialForwardAxis(loaded.initialForwardAxis);
       setCalibrationScale(1);
       setCalibrationAxis('x');
       setCalibrationValue('');
@@ -1066,6 +1060,7 @@ export default function App() {
             setProgress({ stage: 'decoding', value: 0 });
             try {
               const { importNativeCadFile } = await import('@/viewer/nativeCad');
+              const { stepForwardAxis, stepUpAxis } = await import('@/viewer/stepUpAxis');
               const nativeImport = await importNativeCadFile(
                 nativeCadEntry.id,
                 nativeCadEntry.name,
@@ -1076,7 +1071,7 @@ export default function App() {
                 nativeController.signal,
                 {
                   onFirstBatch: (scene) => {
-                    viewer.showProgressivePreview(scene, 'mm', 'z');
+                    viewer.showProgressivePreview(scene, 'mm', stepUpAxis, stepForwardAxis);
                     setProgressiveCadVisible(true);
                   },
                   onBatch: (scene) => viewer.updateProgressivePreview(scene),
@@ -1469,6 +1464,44 @@ export default function App() {
     setMaterialOptions(null);
     setMaterialFinish(null);
   };
+  const cancelJointPreview = useCallback(() => { viewerRef.current?.cancelJointPreview(); }, []);
+  const previewJoint = (id: string, joint?: Kea3dJoint) => {
+    const before = projectSession?.document.instances.find(i => i.id === id)?.attachment?.joint;
+    viewerRef.current?.previewJoint(id, before, joint);
+  };
+  const applyJoint = async (id: string, joint?: Kea3dJoint) => {
+    const { KEA3D_PROJECT_SCHEMA_V2, parseKea3dProjectJson } = await import('@/project/projectFormat');
+    if (!projectSession) return;
+    const previous = projectSession.document;
+    const before = previous.instances.find(i => i.id === id)?.attachment?.joint;
+    if (JSON.stringify(before) === JSON.stringify(joint)) { cancelJointPreview(); return; }
+    const next = parseKea3dProjectJson(JSON.stringify({
+      ...previous, version: 2, $schema: KEA3D_PROJECT_SCHEMA_V2,
+      instances: previous.instances.map(i => i.id === id ? { ...i, attachment: { ...i.attachment, joint } } : i),
+    }));
+    viewerRef.current?.commitJoint(id, before, joint, value => {
+      setProjectSession(session => session ? { ...session, document: value === before ? previous : next } : session);
+    });
+    setMaterialEditState(viewerRef.current?.getMaterialEditState() ?? emptyMaterialEditState);
+    updateDimensions(viewerRef.current?.getDimensions() ?? [0, 0, 0]);
+  };
+  const jointCommitRef = useRef(applyJoint);
+  useEffect(() => { jointCommitRef.current = applyJoint; });
+  const selectedJointInstance = viewerRef.current?.getSelectedAssemblyInstance();
+  useEffect(() => {
+    if (adjustVisible) return;
+    const viewer = viewerRef.current;
+    const joint = projectSession?.document.instances.find(i => i.id === selectedJointInstance)?.attachment?.joint;
+    if (!viewer || !selectedJointInstance || !joint || joint.limits.min === joint.limits.max) return;
+    try {
+      viewer.startJointDrag(selectedJointInstance, joint, () => {}, value => {
+        void jointCommitRef.current(selectedJointInstance, value).catch(error => {
+          viewer.stopJointDrag(); showError((error as Error).message);
+        });
+      });
+    } catch (error) { showError((error as Error).message); }
+    return () => viewer.stopJointDrag();
+  }, [adjustVisible, selectedJointInstance, projectSession]);
   const refreshSceneDocument = () => {
     const document = viewerRef.current?.getSceneDocumentState();
     if (!document) return;
@@ -1477,6 +1510,7 @@ export default function App() {
   };
   const undoMaterial = () => {
     setMaterialEditState(viewerRef.current?.undoLastChange() ?? emptyMaterialEditState);
+    updateDimensions(viewerRef.current?.getDimensions() ?? [0, 0, 0]);
     refreshSceneDocument();
     setMaterialPresetId(null);
     setMaterialOptions(null);
@@ -1484,6 +1518,7 @@ export default function App() {
   };
   const redoMaterial = () => {
     setMaterialEditState(viewerRef.current?.redoLastChange() ?? emptyMaterialEditState);
+    updateDimensions(viewerRef.current?.getDimensions() ?? [0, 0, 0]);
     refreshSceneDocument();
     setMaterialPresetId(null);
     setMaterialOptions(null);
@@ -1701,17 +1736,6 @@ export default function App() {
     setCalibrationValue('');
     updateDimensions(viewerRef.current?.setUnitScale(unitToMeters[unit]) ?? [0, 0, 0]);
   };
-  const changeUpAxis = (axis: UpAxis) => {
-    const nextForwardAxis = isForwardAxisCompatible(axis, forwardAxis) ? forwardAxis : defaultForwardAxis(axis);
-    setUpAxis(axis);
-    setForwardAxis(nextForwardAxis);
-    updateDimensions(viewerRef.current?.setOrientation(axis, nextForwardAxis) ?? [0, 0, 0]);
-  };
-  const changeForwardAxis = (axis: ForwardAxis) => {
-    if (!isForwardAxisCompatible(upAxis, axis)) return;
-    setForwardAxis(axis);
-    updateDimensions(viewerRef.current?.setOrientation(upAxis, axis) ?? [0, 0, 0]);
-  };
   const applyKnownDimensionCalibration = () => {
     const referenceDimensions = selectionInfo?.dimensions ?? modelInfo?.dimensions;
     if (!referenceDimensions) return;
@@ -1726,8 +1750,6 @@ export default function App() {
   const resetAdjustments = () => {
     updateDimensions(viewerRef.current?.resetAdjustments() ?? [0, 0, 0]);
     setSourceUnit(initialSourceUnit);
-    setUpAxis(initialUpAxis);
-    setForwardAxis(initialForwardAxis);
     setCalibrationScale(1);
     setCalibrationValue('');
   };
@@ -2128,19 +2150,30 @@ export default function App() {
             onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSettings(file); }} />
 
           {modelInfo && (
+            <header aria-label="Model header" className="pointer-events-none absolute top-5 inset-x-5 z-40 flex h-[54px] items-center justify-between gap-2 max-lg:top-3 max-lg:inset-x-3 max-lg:h-11">
             <Button
               variant="outline"
               type="button"
-              className="absolute top-5 left-5 z-20 h-11 max-w-[360px] justify-start gap-2.5 rounded-xl bg-card/85 px-3 shadow-lg backdrop-blur-md max-lg:top-3 max-lg:left-3 max-lg:h-10 max-lg:max-w-[calc(100%_-_24px)]"
+              className="pointer-events-auto h-11 min-w-0 max-w-[360px] shrink justify-start gap-2.5 rounded-xl bg-card/85 px-3 shadow-lg backdrop-blur-md"
               aria-label={`Open another model. Current model: ${modelInfo.fileName}`}
               onClick={() => void chooseModelFiles()}
             >
               <img className="size-6 shrink-0" src={`${import.meta.env.BASE_URL}kea3d-icon.svg`} alt="" />
               {!nativeShell && !compactLayout && <span className="kea3d-wordmark shrink-0 text-sm">Kea3D</span>}
-              <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
-              <FileBox className="shrink-0" />
-              <span className="truncate">{modelInfo.fileName}</span>
+              <span className={cn('h-5 w-px shrink-0 bg-border', viewSelectorVisible && 'max-sm:hidden')} aria-hidden="true" />
+              <FileBox className={cn('shrink-0', viewSelectorVisible && 'max-sm:hidden')} />
+              <span className="truncate" title={modelInfo.fileName}>{modelInfo.fileName}</span>
             </Button>
+            {viewSelectorVisible && orientationStep !== 'preview' && <div className="pointer-events-auto h-11 w-40 shrink-0" aria-label="View selector controls">
+              {orientationStep === 'off' ? <Button variant="secondary" className="h-full w-full rounded-xl shadow-lg" onClick={() => viewerRef.current?.beginOrientationSelection()}><Axis3D />Set orientation</Button> : <div className="flex h-full items-center rounded-xl bg-card text-card-foreground shadow-lg ring-1 ring-border">
+                <span role="status" className="min-w-0 flex-1 pl-3 text-sm font-medium">{orientationStep === 'top' ? 'Select top' : 'Select front'}</span>
+                <Tooltip>
+                  <TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-11 shrink-0 rounded-xl" aria-label="Cancel orientation" onClick={() => viewerRef.current?.setViewSelectorVisible(false)}><X /></Button></TooltipTrigger>
+                  <TooltipContent>Cancel orientation (Esc)</TooltipContent>
+                </Tooltip>
+              </div>}
+            </div>}
+            </header>
           )}
 
           {!modelInfo && (
@@ -2149,7 +2182,7 @@ export default function App() {
             </Button>
           )}
 
-          {modelInfo && <ViewerToolbar actions={viewerActions} compact={compactLayout} bottom={compactViewportBottom} sideWorkspace={hasSideWorkspace} open={mobileToolsVisible} onOpenChange={setMobileToolsVisible} />}
+          {modelInfo && <ViewerToolbar actions={viewerActions} compact={compactLayout} reserveRight={viewSelectorVisible ? 220 : 20} bottom={compactViewportBottom} sideWorkspace={hasSideWorkspace} open={mobileToolsVisible} onOpenChange={setMobileToolsVisible} />}
 
           {modelInfo && materialEditState.previewActive && !materialVisible && (
             <div role="status" style={hasSideWorkspace ? { maxWidth: `calc(100% - ${sideWorkspaceWidth} - 24px)` } : undefined} className="absolute top-16 left-3 z-45 flex max-w-[calc(100%_-_24px)] flex-wrap items-center gap-1 rounded-lg border bg-card p-2 text-xs shadow-lg lg:top-auto lg:right-[340px] lg:bottom-5 lg:left-[340px] max-lg:[&_button]:min-h-11">
@@ -2705,7 +2738,14 @@ export default function App() {
               onCompactWorkspaceExpandedChange={setAdjustWorkspaceExpanded}
               contentClassName="grid min-h-0 gap-3 overflow-y-auto"
             >
-                <div className="grid grid-cols-2 gap-2">
+                {projectSession && <Suspense fallback={null}><JointControls instances={projectSession.document.instances}
+                  selectedInstance={viewerRef.current?.getSelectedAssemblyInstance()}
+                  onPreview={previewJoint} onApply={applyJoint} onCancel={cancelJointPreview}
+                  onStopDrag={() => viewerRef.current?.stopJointDrag()}
+                  onDrag={(id, joint, notify) => viewerRef.current?.startJointDrag(id, joint, notify, value => {
+                    void applyJoint(id, value).catch(error => { viewerRef.current?.stopJointDrag(); showError((error as Error).message); });
+                  })} /></Suspense>}
+                <div className="grid gap-2">
                   <label className="grid gap-1 text-[11px] text-muted-foreground">
                     Source units
                     <Select value={sourceUnit} onValueChange={(value) => changeSourceUnit(value as LinearUnit)}>
@@ -2716,30 +2756,12 @@ export default function App() {
                       </SelectContent>
                     </Select>
                   </label>
-                  <label className="grid gap-1 text-[11px] text-muted-foreground">
-                    Source up axis
-                    <Select value={upAxis} onValueChange={(value) => changeUpAxis(value as UpAxis)}>
-                      <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="y">Y up</SelectItem><SelectItem value="z">Z up</SelectItem><SelectItem value="x">X up</SelectItem></SelectContent>
-                    </Select>
-                  </label>
-                  <label className="col-span-2 grid gap-1 text-[11px] text-muted-foreground">
-                    Source forward direction
-                    <Select value={forwardAxis} onValueChange={(value) => changeForwardAxis(value as ForwardAxis)}>
-                      <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {forwardAxes.filter((axis) => isForwardAxisCompatible(upAxis, axis)).map((axis) => (
-                          <SelectItem key={axis} value={axis}>{axis.startsWith('-') ? '−' : '+'}{axis.at(-1)?.toUpperCase()} forward</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </label>
                 </div>
                 <div className="rounded-xl border bg-muted/25 px-3 py-2">
                   <p className="text-[10px] font-medium">Base unit conversion</p>
                   <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">{sourceUnitConversionText[sourceUnit]}</p>
                 </div>
-                <p className="text-[10px] leading-relaxed text-muted-foreground">Choose the units, Up axis, and semantic front used when the model was authored. Kea3D converts length to metres, then maps orientation to +Y Up and +Z Forward.</p>
+                <p className="text-[10px] leading-relaxed text-muted-foreground">Choose the units used when the model was authored. To change its orientation, open View selector and choose Set orientation.</p>
                 <Separator />
                 <section aria-label="Known dimension calibration" className="grid gap-2">
                   <div className="flex items-center justify-between gap-3">
@@ -2980,6 +3002,18 @@ export default function App() {
 
         </section>
       </main>
+      <AlertDialog open={orientationStep === 'preview'} onOpenChange={open => { if (!open) viewerRef.current?.setViewSelectorVisible(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apply orientation?</AlertDialogTitle>
+            <AlertDialogDescription>Rotate the whole model so the green face is the top and the blue face is the front. The source file stays unchanged. You can undo this change.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { viewerRef.current?.applyOrientationSelection(); updateDimensions(viewerRef.current?.getDimensions() ?? [0, 0, 0]); setMaterialEditState(viewerRef.current?.getMaterialEditState() ?? emptyMaterialEditState); }}>Apply</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={discardPrompt} onOpenChange={open => { if (!open) finishDiscardPrompt(false); }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>Unsaved model changes</AlertDialogTitle><AlertDialogDescription>Materials, Anchors, corrections or an active preview have not been saved. Cancel to apply your preview and export the complete model first. Camera, lighting and other view-only settings do not require export.</AlertDialogDescription></AlertDialogHeader>

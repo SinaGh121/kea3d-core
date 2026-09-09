@@ -127,7 +127,7 @@ std::filesystem::path thumbnail_cache_path(const std::filesystem::path& input) {
   if (error) return {};
   std::wostringstream name;
   name << std::hex << std::setw(16) << std::setfill(L'0') << hash << L'-' << std::dec << size << L".k3t";
-  return std::filesystem::path(local_app_data) / L"Kea3D" / L"ThumbnailCache" / L"v2" / name.str();
+  return std::filesystem::path(local_app_data) / L"Kea3D" / L"ThumbnailCache" / L"v3" / name.str();
 }
 
 void append_thumbnail_triangles(const MeshBatch& batch,
@@ -155,8 +155,8 @@ void append_thumbnail_triangles(const MeshBatch& batch,
       }
       const float* position = batch.positions.data() + static_cast<std::size_t>(vertex) * 3;
       value.vertices[corner * 3] = position[0];
-      value.vertices[corner * 3 + 1] = position[2];
-      value.vertices[corner * 3 + 2] = -position[1];
+      value.vertices[corner * 3 + 1] = position[1];
+      value.vertices[corner * 3 + 2] = position[2];
     }
     if (valid) output.push_back(value);
   }

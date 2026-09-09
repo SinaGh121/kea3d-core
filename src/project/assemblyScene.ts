@@ -1,7 +1,57 @@
-import { Group, type Matrix4, type Object3D } from 'three';
+import { Group, Matrix4, Vector3, type Object3D } from 'three';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
-import type { Kea3dProjectDocument } from './projectFormat';
+import { validateJoint, type Kea3dJoint, type Kea3dProjectDocument } from './projectFormat';
 import { discoverComponentAnchorDetails, promoteLegacyNamedAnchors } from './componentAnchors';
+
+const bindings = new WeakMap<Object3D, { instance: string; target: Matrix4; sourceInverse: Matrix4 }>();
+
+export function assemblyObjectForInstance(root: Object3D, instance: string): Object3D | undefined {
+  let result: Object3D | undefined;
+  root.traverse(object => {
+    if (bindings.get(object)?.instance === instance) result = object;
+  });
+  return result;
+}
+
+export function assemblyInstanceForObject(object: Object3D | undefined): string | undefined {
+  for (let node = object; node; node = node.parent ?? undefined) {
+    const binding = bindings.get(node);
+    if (binding) return binding.instance;
+  }
+  return undefined;
+}
+
+export function assemblyJointFrame(root: Object3D, instance: string): Matrix4 {
+  root.updateWorldMatrix(true, true);
+  let frame: Matrix4 | undefined;
+  root.traverse(group => {
+    const binding = bindings.get(group);
+    if (binding?.instance === instance && group.parent) frame = group.parent.matrixWorld.clone().multiply(binding.target);
+  });
+  if (!frame) throw new Error('Assembly connection was not found.');
+  return frame;
+}
+
+export function applyAssemblyJoint(root: Object3D, instance: string, value?: Kea3dJoint): void {
+  const joint = value === undefined ? undefined : validateJoint(value);
+  let found = false;
+  root.traverse(group => {
+    const binding = bindings.get(group);
+    if (!binding || binding.instance !== instance) return;
+    found = true;
+    const motion = new Matrix4();
+    if (joint) {
+      const axis = new Vector3(joint.axis === 'x' ? 1 : 0, joint.axis === 'y' ? 1 : 0, joint.axis === 'z' ? 1 : 0);
+      if (joint.type === 'revolute') motion.makeRotationAxis(axis, joint.state.position);
+      else motion.makeTranslation(axis.multiplyScalar(joint.state.position));
+    }
+    group.matrix.copy(binding.target).multiply(motion).multiply(binding.sourceInverse);
+    group.matrix.decompose(group.position, group.quaternion, group.scale);
+    group.updateMatrix();
+  });
+  if (!found) throw new Error('Assembly connection was not found.');
+  root.updateMatrixWorld(true);
+}
 
 export function discoverComponentAnchors(scene: Object3D, resourceId: string): Map<string, Matrix4> {
   promoteLegacyNamedAnchors(scene);
@@ -52,7 +102,8 @@ export function buildFixedAssemblyScene(
     const attachment = instance.attachment!;
     const group = groupsByInstance.get(instance.id)!;
     const targetGroup = groupsByInstance.get(attachment.targetInstance)!;
-    const sourceAnchor = requiredAnchor(anchorsByResource.get(instance.resource)!, attachment.sourceAnchor, instance.id, instance.resource);
+    const sourceAnchor = attachment.sourceAnchor === undefined ? new Matrix4()
+      : requiredAnchor(anchorsByResource.get(instance.resource)!, attachment.sourceAnchor, instance.id, instance.resource);
     const targetInstance = project.instances.find((candidate) => candidate.id === attachment.targetInstance)!;
     const targetAnchor = requiredAnchor(
       anchorsByResource.get(targetInstance.resource)!,
@@ -65,6 +116,8 @@ export function buildFixedAssemblyScene(
     group.matrixAutoUpdate = true;
     group.updateMatrix();
     targetGroup.add(group);
+    bindings.set(group, { instance: instance.id, target: targetAnchor.clone(), sourceInverse: sourceAnchor.clone().invert() });
+    applyAssemblyJoint(group, instance.id, attachment.joint);
   }
 
   assembly.updateMatrixWorld(true);

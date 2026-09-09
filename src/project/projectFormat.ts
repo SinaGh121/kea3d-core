@@ -1,4 +1,5 @@
 export const KEA3D_PROJECT_SCHEMA = 'https://kea3d.com/schemas/project/v1.json';
+export const KEA3D_PROJECT_SCHEMA_V2 = 'https://kea3d.com/schemas/project/v2.json';
 export const KEA3D_PROJECT_MAX_BYTES = 2 * 1024 * 1024;
 export const KEA3D_PROJECT_MAX_RESOURCES = 1_024;
 export const KEA3D_PROJECT_MAX_INSTANCES = 10_000;
@@ -36,8 +37,17 @@ export class ProjectResourceRecoveryError extends Error {
   }
 }
 
+export interface Kea3dJoint {
+  id: string;
+  type: 'revolute' | 'prismatic';
+  axis: 'x' | 'y' | 'z';
+  limits: { min: number; max: number };
+  state: { position: number };
+}
+
 export interface Kea3dProjectAttachment {
-  sourceAnchor: string;
+  sourceAnchor?: string;
+  joint?: Kea3dJoint;
   targetInstance: string;
   targetAnchor: string;
   [key: string]: unknown;
@@ -51,9 +61,9 @@ export interface Kea3dProjectInstance {
 }
 
 export interface Kea3dProjectDocument {
-  $schema: typeof KEA3D_PROJECT_SCHEMA;
+  $schema: typeof KEA3D_PROJECT_SCHEMA | typeof KEA3D_PROJECT_SCHEMA_V2;
   format: 'kea3d-project';
-  version: 1;
+  version: 1 | 2;
   name: string;
   rootInstance: string;
   resources: Kea3dProjectResource[];
@@ -141,17 +151,34 @@ function parseResources(value: unknown): Kea3dProjectResource[] {
   });
 }
 
-function parseAttachment(value: unknown, index: number): Kea3dProjectAttachment {
+export function validateJoint(value: unknown): Kea3dJoint {
+  const joint = objectRecord(value, 'joint');
+  const id = projectId(joint.id, 'joint.id');
+  if (joint.type !== 'revolute' && joint.type !== 'prismatic') fail('unsupported joint type.');
+  if (!['x', 'y', 'z'].includes(joint.axis as string)) fail('invalid joint axis.');
+  const limits = objectRecord(joint.limits, 'joint.limits');
+  const state = objectRecord(joint.state, 'joint.state');
+  const min = limits.min as number, max = limits.max as number, position = state.position as number;
+  if (![min, max, position].every(v => typeof v === 'number' && Number.isFinite(v))) fail('joint values must be finite numbers.');
+  if (min > max || position < min || position > max) fail('joint position must respect ordered limits.');
+  return { id, type: joint.type, axis: joint.axis as Kea3dJoint['axis'], limits: { min, max }, state: { position } };
+}
+
+function parseAttachment(value: unknown, index: number, version: 1 | 2): Kea3dProjectAttachment {
   const record = objectRecord(value, `instances[${index}].attachment`);
+  if (version === 1 && record.joint !== undefined) fail('Joints require project version 2.');
   return {
     ...record,
-    sourceAnchor: projectId(record.sourceAnchor, `instances[${index}].attachment.sourceAnchor`),
+    ...(version === 2 && record.sourceAnchor === undefined ? {} : {
+      sourceAnchor: projectId(record.sourceAnchor, `instances[${index}].attachment.sourceAnchor`),
+    }),
+    ...(record.joint === undefined ? {} : { joint: validateJoint(record.joint) }),
     targetInstance: projectId(record.targetInstance, `instances[${index}].attachment.targetInstance`),
     targetAnchor: projectId(record.targetAnchor, `instances[${index}].attachment.targetAnchor`),
   } as Kea3dProjectAttachment;
 }
 
-function parseInstances(value: unknown): Kea3dProjectInstance[] {
+function parseInstances(value: unknown, version: 1 | 2): Kea3dProjectInstance[] {
   if (!Array.isArray(value) || value.length === 0) fail('instances must contain at least one instance.');
   if (value.length > KEA3D_PROJECT_MAX_INSTANCES) fail(`instances exceeds the limit of ${KEA3D_PROJECT_MAX_INSTANCES}.`);
   const ids = new Set<string>();
@@ -161,12 +188,18 @@ function parseInstances(value: unknown): Kea3dProjectInstance[] {
     if (ids.has(id)) fail(`instance ID "${id}" is duplicated.`);
     ids.add(id);
     const resource = projectId(record.resource, `instances[${index}].resource`);
-    const attachment = record.attachment === undefined ? undefined : parseAttachment(record.attachment, index);
+    const attachment = record.attachment === undefined ? undefined : parseAttachment(record.attachment, index, version);
     return { ...record, id, resource, ...(attachment ? { attachment } : {}) } as Kea3dProjectInstance;
   });
 }
 
 function validateGraph(document: Kea3dProjectDocument): void {
+  const joints = new Set<string>();
+  for (const instance of document.instances) {
+    const id = instance.attachment?.joint?.id;
+    if (id && joints.has(id)) fail('joint IDs must be unique.');
+    if (id) joints.add(id);
+  }
   const resourceIds = new Set(document.resources.map((resource) => resource.id));
   const instanceById = new Map(document.instances.map((instance) => [instance.id, instance]));
   const root = instanceById.get(document.rootInstance);
@@ -203,18 +236,18 @@ export function parseKea3dProjectJson(json: string): Kea3dProjectDocument {
     fail('document is not valid JSON.');
   }
   const record = objectRecord(parsed, 'document');
-  if (record.$schema !== KEA3D_PROJECT_SCHEMA) fail(`$schema must be "${KEA3D_PROJECT_SCHEMA}".`);
+  if (record.$schema !== (record.version === 2 ? KEA3D_PROJECT_SCHEMA_V2 : KEA3D_PROJECT_SCHEMA)) fail('schema must match project version.');
   if (record.format !== 'kea3d-project') fail('format must be "kea3d-project".');
-  if (record.version !== 1) fail('only version 1 is supported.');
+  if (record.version !== 1 && record.version !== 2) fail('only versions 1 and 2 are supported.');
   const document: Kea3dProjectDocument = {
     ...record,
-    $schema: KEA3D_PROJECT_SCHEMA,
+    $schema: record.version === 2 ? KEA3D_PROJECT_SCHEMA_V2 : KEA3D_PROJECT_SCHEMA,
     format: 'kea3d-project',
-    version: 1,
+    version: record.version,
     name: boundedString(record.name, 'name', 256),
     rootInstance: projectId(record.rootInstance, 'rootInstance'),
     resources: parseResources(record.resources),
-    instances: parseInstances(record.instances),
+    instances: parseInstances(record.instances, record.version),
   } as Kea3dProjectDocument;
   validateGraph(document);
   return document;

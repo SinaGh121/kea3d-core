@@ -136,6 +136,16 @@
 }
 
 @layer components {
+  canvas[aria-label="3D model viewport"]:focus:not(:focus-visible) {
+    outline: none;
+  }
+  canvas[aria-label="3D model viewport"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+  }
+  canvas[aria-label="3D model viewport"][data-pointer-focus]:focus {
+    outline: none;
+  }
   .kea3d-wordmark {
     font-family: "Sora Variable", sans-serif;
     font-weight: 600;

@@ -22,9 +22,10 @@ export interface ViewerAction {
 
 const groups: ViewerAction['group'][] = ['Navigate', 'Inspect', 'Appearance', 'Output', 'Application'];
 
-export function ViewerToolbar({ actions, compact, bottom, sideWorkspace, open, onOpenChange }: {
+export function ViewerToolbar({ actions, compact, bottom, sideWorkspace, open, onOpenChange, reserveRight = 20 }: {
   actions: ViewerAction[];
   compact: boolean;
+  reserveRight?: number;
   bottom: string | number;
   sideWorkspace: boolean;
   open: boolean;
@@ -60,7 +61,7 @@ export function ViewerToolbar({ actions, compact, bottom, sideWorkspace, open, o
     <div ref={container} className="pointer-events-none absolute z-45 flex justify-center"
       style={compact
         ? { left: 8, right: sideWorkspace ? `calc(${sideWorkspaceWidth} + 8px)` : 8, bottom: sideWorkspace || bottom === 0 ? 8 : `calc(${bottom} + 8px)` }
-        : { top: 20, left: 400, right: 20 }}>
+        : { top: 20, left: 400, right: reserveRight }}>
       <Toolbar.Root loop aria-label={compact ? 'Mobile viewer tools' : 'Viewer tools'}
         className="pointer-events-auto flex max-w-full items-center gap-1 rounded-xl border bg-card p-1 shadow-lg">
         {pinned.map((action) => (

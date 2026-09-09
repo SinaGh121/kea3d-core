@@ -1,23 +1,17 @@
-# Kea3D Core 0.1.103
+# Kea3D Core 0.1.120
 
-Matching Free/Core source. License: MPL-2.0; third-party components retain their licenses. See LICENSE and THIRD_PARTY_NOTICES.md.
+Matching Free/Core source. See LICENSE and THIRD_PARTY_NOTICES.md for licensing.
 
 ## Build
 
-Install Node.js/npm, then run:
+Install Node.js/npm, then run npm ci and npm run build. Web output: dist/.
+Desktop builds require Rust and Tauri platform prerequisites; run npx tauri build.
 
-```sh
-npm ci
-npm run build
-```
+Required rebuild instructions:
 
-The web output is in dist/. Use npm run dev for local development.
+- native/cad-worker/README.md
+- native/cad-wasm/README.md
+- legal/ANDROID_RECIPIENT_REBUILD.md
+- docs/LINUX_RELEASE_AND_UPDATES.md
 
-Native builds require Rust and the target platform's Tauri prerequisites. Run npx tauri build for desktop packages.
-
-Required component/platform rebuild instructions: native/cad-worker/README.md.
-Required component/platform rebuild instructions: native/cad-wasm/README.md.
-Required component/platform rebuild instructions: legal/ANDROID_RECIPIENT_REBUILD.md.
-Required component/platform rebuild instructions: docs/LINUX_RELEASE_AND_UPDATES.md.
-
-Preserve all license, notice and attribution files. Source releases: https://github.com/SinaGh121/kea3d-core/releases
+Preserve licenses, notices and attribution files.

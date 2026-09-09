@@ -1,10 +1,11 @@
 import { DoubleSide, Group, Mesh, MeshStandardMaterial, type AnimationClip, type Object3D, type WebGLRenderer } from 'three';
 import { loadGltfFiles } from './loadGltfFiles';
 import { buildCadScene, parseCadInWorker } from './loadCadFile';
+import { stepForwardAxis, stepUpAxis } from './stepUpAxis';
 import { fileExtension, readFileBuffer, registerPreloadedFileBuffer } from './localFile';
 import { createLocalFileManager } from './localFileManager';
 import { threeMfUnitFromXml } from './threeMfUnit';
-import type { LinearUnit, LoadProgress, UpAxis } from './types';
+import type { ForwardAxis, LinearUnit, LoadProgress, UpAxis } from './types';
 import { blendCompatibilityMessage, cadNoGeometryMessage, throwIfLoadCancelled } from './loadControl';
 import { parseMeshGeometryInWorker } from './loadMeshGeometry';
 import { createCadCacheKey, readCadCache, writeCadCache } from './cadCache';
@@ -22,6 +23,7 @@ interface LoadedModelSource {
   totalSize: number;
   sourceUnit: LinearUnit;
   upAxis: UpAxis;
+  forwardAxis?: ForwardAxis;
   project?: Kea3dProjectSession;
 }
 
@@ -198,7 +200,8 @@ export async function loadModelFiles(
       mainFile,
       totalSize,
       sourceUnit: 'mm',
-      upAxis: 'z',
+      upAxis: format === 'step' ? stepUpAxis : 'z',
+      forwardAxis: format === 'step' ? stepForwardAxis : undefined,
     };
   }
 

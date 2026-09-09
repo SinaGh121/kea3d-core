@@ -50,7 +50,7 @@ std::filesystem::path thumbnail_cache_path(const std::vector<std::uint8_t>& byte
   std::wostringstream name;
   name << std::hex << std::setw(16) << std::setfill(L'0') << thumbnail_hash(bytes)
        << L'-' << std::dec << bytes.size() << L".k3t";
-  return std::filesystem::path(local_app_data) / L"Kea3D" / L"ThumbnailCache" / L"v2" / name.str();
+  return std::filesystem::path(local_app_data) / L"Kea3D" / L"ThumbnailCache" / L"v3" / name.str();
 }
 
 bool load_cad_thumbnail(const std::vector<std::uint8_t>& source, unsigned requested_edge,

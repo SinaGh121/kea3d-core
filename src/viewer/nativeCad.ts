@@ -2,6 +2,7 @@ import { BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Mesh, MeshSt
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { loadCancelledError, throwIfLoadCancelled } from './loadControl';
 import { registerPreparedModel } from './preparedModel';
+import { stepForwardAxis, stepUpAxis } from './stepUpAxis';
 import { disposeObject3D } from './disposeObject';
 import { createNativeCadDeliveryBarrier } from './nativeCadDelivery';
 import type { LoadProgress } from './types';
@@ -169,7 +170,8 @@ export async function importNativeCadFile(
       animations: [],
       totalSize: sourceSize,
       sourceUnit: 'mm',
-      upAxis: 'z',
+      upAxis: stepUpAxis,
+      forwardAxis: stepForwardAxis,
     });
     completed = true;
     return { file, warning: terminalMessage?.trim() || null };

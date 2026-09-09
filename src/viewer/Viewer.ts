@@ -13,6 +13,7 @@ import {
   Group,
   HemisphereLight,
   MathUtils,
+  Matrix4,
   NeutralToneMapping,
   OrthographicCamera,
   PMREMGenerator,
@@ -59,6 +60,10 @@ import { throwIfLoadCancelled } from './loadControl';
 import { validateImportedScene } from './validateImportedScene';
 import { defaultMaterialPresetOptions, findMaterialPreset, type MaterialPreset, type MaterialPresetOptions } from './materialPresets';
 import { CommandHistory, type ReversibleCommand } from '../commandHistory';
+import { applyAssemblyJoint, assemblyJointFrame, assemblyInstanceForObject, assemblyObjectForInstance } from '../project/assemblyScene';
+import { JointDragControls } from './JointDragControls';
+import { constrainedJointPosition } from '../project/jointMotion';
+import type { Kea3dJoint } from '../project/projectFormat';
 import { applyAnchorEdit, anchorIdForObject, discoverComponentAnchorDetails, promoteLegacyNamedAnchors, validateAnchorEditInput, type AnchorEditInput, type ComponentAnchor } from '@/project/componentAnchors';
 import type { AnchorInfo, AnimationPlaybackState, CameraProjection, CameraState, CameraView, DisplayMode, ForwardAxis, LightingSettings, LinearUnit, LoadedModel, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme, ViewportBackground } from './types';
 
@@ -156,6 +161,87 @@ export class Viewer {
   private rotationMode: RotationMode = 'fixed-up';
   private readonly orientationGizmo: OrientationGizmo;
   private readonly viewSelector = new ViewSelector();
+  onOrientationStep: (step: 'off' | 'top' | 'front' | 'preview') => void = () => undefined;
+  private orientationOffset = new Quaternion();
+  private orientationSession: { top: Vector3 | null; quaternion: Quaternion; offset: Quaternion; mode: RotationMode; preview: boolean } | null = null;
+
+  beginOrientationSelection(): void {
+    if (!this.currentModel || this.orientationSession) return;
+    this.setViewSelectorVisible(true);
+    this.orientationSession = { top: null, quaternion: this.currentModel.quaternion.clone(), offset: this.orientationOffset.clone(), mode: this.rotationMode, preview: false };
+    this.setRotationMode('free');
+    this.viewSelector.setOrientationMode(true);
+    this.onOrientationStep('top');
+    this.invalidate();
+  }
+
+  chooseOrientationAxis(axis: ForwardAxis): void {
+    const direction = new Vector3(axis.endsWith('x') ? 1 : 0, axis.endsWith('y') ? 1 : 0, axis.endsWith('z') ? 1 : 0);
+    if (axis.startsWith('-')) direction.negate();
+    this.selectOrientationDirection(direction);
+  }
+
+  canChooseOrientationAxis(axis: ForwardAxis): boolean {
+    const top = this.orientationSession?.top;
+    return !top || Math.abs(top.getComponent(axis.endsWith('x') ? 0 : axis.endsWith('y') ? 1 : 2)) < 0.01;
+  }
+
+  selectOrientationDirection(direction: Vector3): void {
+    const session = this.orientationSession;
+    if (!session || !this.currentModel || session.preview) return;
+    if (!session.top) {
+      session.top = direction.clone();
+      this.viewSelector.setOrientationMode(true, session.top);
+      this.onOrientationStep('front');
+    } else {
+      if (Math.abs(session.top.dot(direction)) > 0.01) return;
+      const right = session.top.clone().cross(direction);
+      const correction = new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(right, session.top, direction).invert());
+      this.orientationOffset.copy(correction).multiply(session.offset);
+      this.currentModel.quaternion.copy(correction).multiply(session.quaternion);
+      session.preview = true;
+      this.viewSelector.setVisible(false);
+      this.refreshModelLayout(false);
+      this.viewSelector.configure(this.currentModel);
+      this.viewSelector.setVisible(true);
+      this.viewSelector.setOrientationMode(true, new Vector3(0, 1, 0), new Vector3(0, 0, 1));
+      this.fitViewSelector();
+      this.onOrientationStep('preview');
+    }
+    this.invalidate();
+  }
+
+  backOrientationSelection(): void {
+    const session = this.orientationSession;
+    if (!session || !this.currentModel) return;
+    this.currentModel.quaternion.copy(session.quaternion);
+    this.orientationOffset.copy(session.offset);
+    session.preview = false;
+    session.top = null;
+    this.refreshModelLayout(false);
+    this.viewSelector.configure(this.currentModel);
+    this.viewSelector.setVisible(true);
+    this.viewSelector.setOrientationMode(true);
+    this.fitViewSelector();
+    this.onOrientationStep('top');
+  }
+
+  applyOrientationSelection(): void {
+    const session = this.orientationSession;
+    const model = this.currentModel;
+    if (!session?.preview || !model) return;
+    const after = model.quaternion.clone();
+    const offset = this.orientationOffset.clone();
+    this.commandHistory.recordApplied({ label: 'Set model orientation',
+      apply: () => { model.quaternion.copy(after); this.orientationOffset.copy(offset); this.refreshModelLayout(true); },
+      revert: () => { model.quaternion.copy(session.quaternion); this.orientationOffset.copy(session.offset); this.refreshModelLayout(true); },
+    });
+    this.orientationSession = null;
+    this.setRotationMode(session.mode);
+    this.viewSelector.setVisible(true);
+    this.setViewSelectorVisible(false, false);
+    this.fit();
+  }
   private viewSelectorPreviousCamera: CameraState | null = null;
   private viewSelectorPreviousLimits: { min: number; max: number } | null = null;
   private readonly accentColor = new Color(0xc8ff63);
@@ -198,6 +284,74 @@ export class Viewer {
   private readonly originalMaterials = new Map<Mesh, MeshMaterial>();
   private readonly ownedMaterialOverrides = new Set<Material>();
   private readonly commandHistory = new CommandHistory(commandHistoryLimit);
+  private jointPreviewUndo: (() => void) | null = null;
+  private jointDrag: JointDragControls | null = null;
+
+  getSelectedAssemblyInstance(): string | undefined {
+    return this.selectedObjects.length === 1 ? assemblyInstanceForObject(this.selectedObjects[0]) : undefined;
+  }
+
+  stopJointDrag(): void {
+    const drag = this.jointDrag; this.jointDrag = null; drag?.dispose();
+    this.cancelJointPreview();
+  }
+
+  startJointDrag(instance: string, joint: Kea3dJoint, notify: (value: number) => void,
+    commit: (joint: Kea3dJoint) => void): void {
+    this.stopJointDrag();
+    if (!this.currentModel) return;
+    if (this.explodeFactor !== 0) throw new Error('Reset Explode before moving a connection.');
+    const part = assemblyObjectForInstance(this.currentModel, instance);
+    if (part) this.setSelectedObjects([part]);
+    this.jointDrag = new JointDragControls(this.scene, this.renderer.domElement, () => this.camera,
+      () => assemblyJointFrame(this.currentModel!, instance), joint,
+      event => {
+        if (!this.currentModel || this.measurementEnabled || this.viewSelector.isVisible() || this.explodeFactor !== 0) return false;
+        this.updatePointerRay(event);
+        const hit = pickVisibleMesh(this.raycaster, this.currentModel);
+        return !!hit && assemblyInstanceForObject(hit.object) === instance;
+      },
+      value => { this.previewJoint(instance, joint, { ...joint, state: { position: value } }); notify(value); },
+      value => commit({ ...joint, state: { position: value } }),
+      () => { this.cancelJointPreview(); notify(joint.state.position); }, () => this.invalidate());
+  }
+
+  cancelJointPreview(): void {
+    this.jointPreviewUndo?.();
+    this.jointPreviewUndo = null;
+  }
+
+  previewJoint(instance: string, before: Kea3dJoint | undefined, after: Kea3dJoint | undefined): void {
+    constrainedJointPosition(before, after);
+    this.cancelJointPreview();
+    const root = this.currentModel;
+    if (!root) return;
+    if (this.explodeFactor !== 0) throw new Error('Reset Explode before editing a connection.');
+    applyAssemblyJoint(root, instance, after);
+    const refresh = () => { this.refreshAnchorDocument(this.selectedObjects.map(o => o.uuid)); this.refreshModelLayout(); };
+    this.jointPreviewUndo = () => {
+      if (root !== this.currentModel) return;
+      applyAssemblyJoint(root, instance, before);
+      refresh();
+    };
+    refresh();
+  }
+
+  commitJoint(instance: string, before: Kea3dJoint | undefined, after: Kea3dJoint | undefined,
+    sync: (joint: Kea3dJoint | undefined) => void): void {
+    constrainedJointPosition(before, after);
+    this.cancelJointPreview();
+    const root = this.currentModel;
+    if (!root) return;
+    const apply = (joint: Kea3dJoint | undefined) => {
+      applyAssemblyJoint(root, instance, joint);
+      this.refreshAnchorDocument(this.selectedObjects.map(o => o.uuid));
+      this.refreshModelLayout();
+      sync(joint);
+    };
+    if (this.explodeFactor !== 0) throw new Error('Reset Explode before editing a connection.');
+    this.commandHistory.execute({ label: 'Move part', affectsDocument: false, apply: () => apply(after), revert: () => apply(before) });
+  }
   private materialPreview: MaterialChange | null = null;
   private selectedObjects: Object3D[] = [];
   private currentAnchors: ComponentAnchor[] = [];
@@ -258,6 +412,12 @@ export class Viewer {
     this.renderer.toneMappingExposure = 1;
     this.renderer.domElement.className = 'absolute inset-0 block h-full w-full touch-none';
     this.renderer.domElement.setAttribute('aria-label', '3D model viewport');
+    this.renderer.domElement.addEventListener('pointerdown', () => {
+      this.renderer.domElement.dataset.pointerFocus = 'true';
+    }, true);
+    this.renderer.domElement.addEventListener('blur', () => {
+      delete this.renderer.domElement.dataset.pointerFocus;
+    });
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove);
@@ -348,9 +508,10 @@ export class Viewer {
     this.currentAnimations = animations;
     this.initialSourceUnit = sourceUnit;
     this.initialUpAxis = upAxis;
-    this.initialForwardAxis = defaultForwardAxis(upAxis);
+    this.initialForwardAxis = loaded.forwardAxis ?? defaultForwardAxis(upAxis);
     this.basePosition.copy(scene.position);
     this.baseQuaternion.copy(scene.quaternion);
+    this.orientationOffset.identity();
     this.baseScale.copy(scene.scale);
     scene.scale.copy(this.baseScale).multiplyScalar(unitToMeters[sourceUnit]);
     scene.quaternion.copy(orientationCorrection(upAxis, this.initialForwardAxis).multiply(this.baseQuaternion));
@@ -386,13 +547,13 @@ export class Viewer {
     };
   }
 
-  showProgressivePreview(scene: Object3D, sourceUnit: LinearUnit, upAxis: UpAxis): void {
+  showProgressivePreview(scene: Object3D, sourceUnit: LinearUnit, upAxis: UpAxis, forwardAxis = defaultForwardAxis(upAxis)): void {
     if (this.disposed || this.progressivePreview?.scene === scene) return;
     this.discardProgressivePreview();
     const container = new Group();
     container.name = `${scene.name || 'CAD model'} preview`;
     container.scale.setScalar(unitToMeters[sourceUnit]);
-    container.quaternion.copy(orientationCorrection(upAxis, defaultForwardAxis(upAxis)));
+    container.quaternion.copy(orientationCorrection(upAxis, forwardAxis));
     container.add(scene);
     this.progressivePreview = { scene, container };
     if (this.currentModel) this.currentModel.visible = false;
@@ -635,6 +796,16 @@ export class Viewer {
   }
 
   setViewSelectorVisible(visible: boolean, restorePrevious = true): boolean {
+    if (!visible && this.orientationSession) {
+      const session = this.orientationSession;
+      this.orientationSession = null;
+      this.currentModel?.quaternion.copy(session.quaternion);
+      this.orientationOffset.copy(session.offset);
+      this.refreshModelLayout(false);
+      this.setRotationMode(session.mode);
+      this.viewSelector.setVisible(true);
+    }
+    if (!visible) { this.viewSelector.setOrientationMode(false); this.onOrientationStep('off'); }
     const next = visible && this.currentModel !== null;
     if (next === this.viewSelector.isVisible()) return next;
     this.cameraTransition = null;
@@ -979,12 +1150,14 @@ export class Viewer {
   }
 
   undoLastChange(): MaterialEditState {
+    this.cancelJointPreview();
     this.cancelMaterialPreview();
     this.commandHistory.undo();
     return this.getMaterialEditState();
   }
 
   redoLastChange(): MaterialEditState {
+    this.cancelJointPreview();
     this.cancelMaterialPreview();
     this.commandHistory.redo();
     return this.getMaterialEditState();
@@ -1063,7 +1236,7 @@ export class Viewer {
     if (!this.currentModel) return this.getDimensions();
     if (!isForwardAxisCompatible(upAxis, forwardAxis)) return this.getDimensions();
     const correction = orientationCorrection(upAxis, forwardAxis);
-    this.currentModel.quaternion.copy(correction.multiply(this.baseQuaternion));
+    this.currentModel.quaternion.copy(this.orientationOffset.clone().multiply(correction).multiply(this.baseQuaternion));
     return this.refreshModelLayout(true);
   }
 
@@ -1083,6 +1256,7 @@ export class Viewer {
 
   resetAdjustments(): [number, number, number] {
     if (!this.currentModel) return this.getDimensions();
+    this.orientationOffset.identity();
     this.currentModel.position.copy(this.basePosition);
     this.currentModel.quaternion.copy(orientationCorrection(this.initialUpAxis, this.initialForwardAxis).multiply(this.baseQuaternion));
     this.currentModel.scale.copy(this.baseScale).multiplyScalar(unitToMeters[this.initialSourceUnit]);
@@ -1274,6 +1448,8 @@ export class Viewer {
   }
 
   private clearModel(): void {
+    this.stopJointDrag();
+    this.cancelJointPreview();
     this.measurementEnabled = false;
     this.renderer.domElement.style.cursor = '';
     this.clearMeasurement();
@@ -2009,6 +2185,10 @@ export class Viewer {
     this.updatePointerRay(event);
     if (this.viewSelector.isVisible()) {
       const direction = this.viewSelector.select(this.raycaster);
+      if (this.orientationSession) {
+        if (direction) this.selectOrientationDirection(direction);
+        return;
+      }
       this.setViewSelectorVisible(false, !direction);
       if (direction) {
         this.snapToDirection(direction);

@@ -4,6 +4,98 @@ import { strToU8, zipSync } from 'fflate';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+test('connection viewer locks authored axes and limits and fixed parts cannot move', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto('/');
+  const joint = { id: 'slide', type: 'prismatic', axis: 'x', limits: { min: -0.07, max: 0.05 }, state: { position: 0 } };
+  const manifest = { $schema: 'https://kea3d.com/schemas/project/v2.json', version: 2, format: 'kea3d-project', name: 'Motion test', rootInstance: 'base',
+    resources: [{ id: 'part', uri: 'part.glb' }], instances: [
+      { id: 'base', resource: 'part' },
+      { id: 'movable', resource: 'part', attachment: { targetInstance: 'base', targetAnchor: 'mount', joint } },
+      { id: 'fixed', resource: 'part', attachment: { targetInstance: 'base', targetAnchor: 'mount' } },
+    ] };
+  await page.locator('input[type=file]').first().setInputFiles([
+    { name: 'motion.kea3d', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(manifest)) },
+    { name: 'part.glb', mimeType: 'model/gltf-binary', buffer: triangleModel(false, false, [{ id: 'mount', x: 2 }]) },
+  ]);
+  await page.getByRole('button', { name: 'Adjust model', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Connection motion' });
+  await expect(panel.getByRole('combobox')).toHaveCount(1);
+  await expect(panel.getByText('Slide X · -7 to 5 cm', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /Finish dragging|Drag in viewport/ })).toHaveCount(0);
+  await expect(panel.getByLabel('Position (cm)')).toBeEnabled();
+  await panel.getByLabel('Position (cm)').fill('2');
+  await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(panel.getByLabel('Position (cm)')).toHaveValue('0');
+  await expect(panel.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+  await panel.getByLabel('Position (cm)').fill('6');
+  await expect(panel.getByRole('alert')).toBeVisible();
+  await panel.getByLabel('Position (cm)').fill('5');
+  await panel.getByRole('button', { name: 'Apply', exact: true }).click();
+  await page.getByRole('button', { name: 'Export model', exact: true }).click();
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const saved = JSON.parse(await readFile((await (await downloaded).path())!, 'utf8'));
+  expect(saved.instances[1].attachment.joint).toEqual({ ...joint, state: { position: 0.05 } });
+  await page.getByRole('button', { name: 'Adjust model', exact: true }).click();
+  await panel.getByRole('combobox').click(); await page.getByRole('option', { name: 'fixed', exact: true }).click();
+  await expect(panel.getByText('Fixed connection. Movement is disabled by the assembly.')).toBeVisible();
+  await expect(panel.getByRole('slider')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Drag in viewport' })).toHaveCount(0);
+  await panel.getByRole('combobox').click();
+  await page.getByRole('option', { name: 'movable', exact: true }).click();
+  await panel.getByLabel('Position (cm)').fill('1');
+  await panel.getByRole('button', { name: 'Apply', exact: true }).click();
+  await page.locator('input[type=file]').first().setInputFiles({ name: 'replacement.glb', mimeType: 'model/gltf-binary', buffer: triangleModel() });
+  await expect(page.getByRole('button', { name: /Open another model.*replacement/ })).toBeVisible();
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+});
+
+test('selecting a non-first movable child does not loop selection', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto('/');
+  const joint = { id: 'slide', type: 'prismatic', axis: 'x', limits: { min: -1, max: 1 }, state: { position: 0 } };
+  const manifest = { $schema: 'https://kea3d.com/schemas/project/v2.json', version: 2, format: 'kea3d-project', name: 'Selection test', rootInstance: 'base',
+    resources: [{ id: 'part', uri: 'part.glb' }], instances: [
+      { id: 'base', resource: 'part' },
+      ...['first-child', 'second-child'].map(id => ({ id, resource: 'part', attachment: { targetInstance: 'base', targetAnchor: 'mount', joint: { ...joint, id } } })),
+    ] };
+  await page.locator('input[type=file]').first().setInputFiles([
+    { name: 'selection.kea3d', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(manifest)) },
+    { name: 'part.glb', mimeType: 'model/gltf-binary', buffer: triangleModel(false, false, [{ id: 'mount', x: 2 }]) },
+  ]);
+  await page.getByRole('button', { name: 'Expand base', exact: true }).click();
+  await page.getByRole('button', { name: 'second-child', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Connection motion' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Adjust model', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Connection motion' });
+  await expect(panel.getByRole('combobox')).toContainText('second-child');
+  for (const name of ['first-child', 'second-child']) {
+    await panel.getByRole('combobox').click();
+    await page.getByRole('option', { name, exact: true }).click();
+    await expect(panel.getByRole('combobox')).toContainText(name);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('viewport focus outline is keyboard-only', async ({ page }) => {
+  await page.goto('/');
+  const canvas = page.locator('canvas[aria-label="3D model viewport"]');
+  await canvas.evaluate(element => {
+    element.tabIndex = 0;
+    element.addEventListener('pointerdown', () => element.focus(), { once: true });
+  });
+  await canvas.click({ position: { x: 10, y: 200 }, force: true });
+  await expect(canvas).toBeFocused();
+  await expect(canvas).toHaveCSS('outline-style', 'none');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  await expect(canvas).toBeFocused();
+  await expect(canvas).toHaveCSS('outline-style', 'solid');
+});
+
 function triangleModel(
   includeSecondPart = false,
   duplicateMaterialRecords = false,
@@ -930,6 +1022,66 @@ for (const size of [
   });
 }
 
+for (const width of [390, 1600]) test(`orientation selection preview and cancel at ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto('/');
+  await openTestModel(page);
+  const selector = page.getByRole('button', { name: 'View selector', exact: true });
+  await selector.click();
+  const controls = page.getByLabel('View selector controls');
+  await expect(controls.getByRole('button', { name: 'Set orientation', exact: true })).toHaveClass(/bg-secondary/);
+  const fileButton = page.getByRole('button', { name: /Open another model. Current model:/ });
+  const fileBounds = (await fileButton.boundingBox())!;
+  const controlBounds = (await controls.boundingBox())!;
+  expect(Math.abs(fileBounds.y - controlBounds.y)).toBeLessThan(3);
+  expect(fileBounds.x + fileBounds.width).toBeLessThan(controlBounds.x);
+  expect(controlBounds.x + controlBounds.width).toBeLessThanOrEqual(width);
+  if (width === 1600) {
+    const toolbarBounds = (await page.getByRole('toolbar', { name: 'Viewer tools', exact: true }).boundingBox())!;
+    expect(Math.abs(toolbarBounds.y + toolbarBounds.height / 2 - (controlBounds.y + controlBounds.height / 2))).toBeLessThan(2);
+  }
+  await page.screenshot({ path: `artifacts/orientation-header-${width}.png` });
+  await controls.getByRole('button', { name: 'Set orientation', exact: true }).click();
+  const stepBounds = (await controls.boundingBox())!;
+  expect(stepBounds.width).toBe(controlBounds.width);
+  expect(stepBounds.height).toBe(controlBounds.height);
+  expect(stepBounds.x).toBe(controlBounds.x);
+  const close = controls.getByRole('button', { name: 'Cancel orientation', exact: true });
+  await expect(close).toBeVisible();
+  expect((await close.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+  await page.screenshot({ path: `artifacts/orientation-step-${width}.png` });
+  await close.click();
+  await expect(controls).toBeHidden();
+  await selector.click();
+  await controls.getByRole('button', { name: 'Set orientation', exact: true }).click();
+  const chooseFaces = async () => {
+    const canvas = page.locator('canvas[aria-label="3D model viewport"]');
+    const bounds = (await canvas.boundingBox())!;
+    // Pick actual cage faces, not a hidden application API.
+    for (const step of ['Select top', 'Select front']) {
+      for (const [x, y] of [[0.5, 0.4], [0.57, 0.5], [0.43, 0.5], [0.5, 0.55]]) {
+        if (!await controls.isVisible() || !(await controls.getByRole('status').textContent())?.includes(step)) break;
+        await page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
+      }
+    }
+  };
+  await expect(controls.getByRole('button')).toHaveCount(1);
+  await chooseFaces();
+  const confirmation = page.getByRole('alertdialog', { name: 'Apply orientation?' });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await page.screenshot({ path: `artifacts/orientation-preview-${width}.png` });
+  await page.keyboard.press('Escape');
+  await expect(controls).toBeHidden();
+  await selector.click();
+  await controls.getByRole('button', { name: 'Set orientation', exact: true }).click();
+  await chooseFaces();
+  await confirmation.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(confirmation).toBeHidden();
+  await expect(controls).toBeHidden();
+  await page.keyboard.press('Control+z');
+});
+
 test('loaded model exposes synchronized viewer controls and information', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
@@ -1322,7 +1474,7 @@ test('same material matches equivalent imported PBR records, not only shared ins
   await expect(page.getByRole('button', { name: 'Original' })).toBeEnabled();
 });
 
-test('model orientation exposes only forward directions perpendicular to Up', async ({ page }) => {
+test('adjust model keeps units without duplicate orientation controls', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
   await openTestModel(page);
@@ -1330,16 +1482,10 @@ test('model orientation exposes only forward directions perpendicular to Up', as
   await page.getByRole('toolbar', { name: 'Viewer tools' })
     .getByRole('button', { name: 'Adjust model' })
     .click();
-  const forwardSelect = page.getByRole('combobox', { name: 'Source forward direction' });
-  await expect(forwardSelect).toContainText('+Z forward');
-  await forwardSelect.click();
-  await expect(page.getByRole('option', { name: '+X forward' })).toBeVisible();
-  await expect(page.getByRole('option', { name: '−X forward' })).toBeVisible();
-  await expect(page.getByRole('option', { name: '+Z forward' })).toBeVisible();
-  await expect(page.getByRole('option', { name: '−Z forward' })).toBeVisible();
-  await expect(page.getByRole('option', { name: /Y forward/ })).toHaveCount(0);
-  await page.getByRole('option', { name: '+X forward' }).click();
-  await expect(forwardSelect).toContainText('+X forward');
+  await expect(page.getByRole('combobox', { name: 'Source units' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Source up axis' })).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Source forward direction' })).toHaveCount(0);
+  await expect(page.getByText('To change its orientation, open View selector and choose Set orientation.', { exact: false })).toBeVisible();
 });
 
 test('inch-authored files use the exact inch-to-metre conversion', async ({ page }) => {

@@ -11,6 +11,25 @@ function setValueCommand(state: { value: number }, value: number, label = `Set $
 }
 
 describe('command history', () => {
+  it('keeps view motion undoable without hiding real unsaved edits', () => {
+    const history = new CommandHistory();
+    const state = { value: 0 };
+    const saved = history.getRevision();
+    history.execute({ ...setValueCommand(state, 1), affectsDocument: false });
+    expect(history.getRevision()).toBe(saved);
+    history.execute(setValueCommand(state, 2));
+    const edited = history.getRevision();
+    expect(edited).not.toBe(saved);
+    history.execute({ ...setValueCommand(state, 3), affectsDocument: false });
+    expect(history.getRevision()).toBe(edited);
+    history.undo();
+    expect(state.value).toBe(2);
+    expect(history.getRevision()).toBe(edited);
+    history.undo();
+    expect(history.getRevision()).toBe(saved);
+    history.redo();
+    expect(history.getRevision()).toBe(edited);
+  });
   it('restores checkpoints and never reuses a discarded branch revision', () => {
     const history = new CommandHistory();
     const command = { label: 'Reusable', apply() {}, revert() {} };

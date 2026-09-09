@@ -1,5 +1,11 @@
 # Browser test assets
 
+## robot-cart-motion.kea3dp
+
+- Source: owner-provided Kea3D sample from C:\MEGA\Share\Kea3D-Samples\Robot-Cart-Motion.
+- Purpose: reproduce instance/anchor name collisions and verify all four motion controls.
+- Keep in private test materials; not a public source/build input.
+
 ## AnimatedMorphCube.glb
 
 - Source: [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/AnimatedMorphCube)

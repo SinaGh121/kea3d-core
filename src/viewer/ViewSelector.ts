@@ -133,6 +133,20 @@ export class ViewSelector {
   private openingStartedAt: number | null = null;
   private readonly primaryColor = new Color(0xc8ff63);
   private theme: ViewerTheme = 'dark';
+  private orientationTop: Vector3 | null = null;
+  private orientationMode = false;
+  private orientationFront: Vector3 | null = null;
+
+  setOrientationMode(enabled: boolean, top: Vector3 | null = null, front: Vector3 | null = null): void {
+    this.orientationMode = enabled;
+    this.orientationTop = top;
+    this.orientationFront = front;
+    this.hovered = null;
+    this.targets.forEach(target => {
+      target.hitMesh.visible = !enabled || target.activeAxes === 1;
+      this.applyRestStyle(target);
+    });
+  }
 
   constructor() {
     this.group.name = 'Kea3D view selector';
@@ -250,7 +264,9 @@ export class ViewSelector {
     const candidates = hits
       .map((hit) => this.targets.find((target) => target.hitMesh === hit.object))
       .filter((target): target is ViewTarget => target !== undefined);
-    return candidates.sort((a, b) => b.activeAxes - a.activeAxes)[0] ?? null;
+    return candidates.filter(target => !this.orientationMode || (target.activeAxes === 1
+      && (!this.orientationTop || Math.abs(target.direction.dot(this.orientationTop)) < 0.01)))
+      .sort((a, b) => b.activeAxes - a.activeAxes)[0] ?? null;
   }
 
   hover(raycaster: Raycaster): boolean {
@@ -304,6 +320,19 @@ export class ViewSelector {
     target.outline.color.copy(this.primaryColor);
     target.outline.opacity = target.restOutlineOpacity;
     target.visualMesh.scale.setScalar(1);
+    if (this.orientationMode && this.orientationTop) {
+      const dot = target.direction.dot(this.orientationTop);
+      if (dot > 0.99) {
+        target.fill.color.set(0x22c55e);
+        target.fill.opacity = 0.35;
+        target.outline.color.set(0x22c55e);
+      } else if (Math.abs(dot) > 0.99) target.fill.opacity = 0.015;
+      if (this.orientationFront && target.direction.dot(this.orientationFront) > 0.99) {
+        target.fill.color.set(0x3b82f6);
+        target.fill.opacity = 0.35;
+        target.outline.color.set(0x3b82f6);
+      }
+    }
   }
 
   private baseColor(): Color {
