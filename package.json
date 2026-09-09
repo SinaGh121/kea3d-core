@@ -35,7 +35,7 @@
     "version:set": "node scripts/product-version.mjs set",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --exclude tests/browser/**",
+    "test": "vitest run --exclude \"tests/browser/**\"",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "rust:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",

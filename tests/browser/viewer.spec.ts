@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { strToU8, zipSync } from 'fflate';
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 test('connection viewer locks authored axes and limits and fixed parts cannot move', async ({ page }) => {
@@ -822,12 +822,17 @@ test('STEP passes the production WebAssembly import gate', async ({ page }) => {
   await expect(page.getByText('The model does not contain renderable triangle geometry.')).toHaveCount(0);
 });
 
-test('web project folder selection preserves relative paths and opens its manifest', async ({ page }) => {
+test('web project folder selection preserves relative paths and opens its manifest', async ({ page }, testInfo) => {
+  const folder = testInfo.outputPath('project-folder');
+  await mkdir(folder, { recursive: true });
+  for (const name of ['animated.kea3d', 'AnimatedMorphCube.glb']) {
+    await copyFile(resolve('tests/fixtures', name), resolve(folder, name));
+  }
   await page.goto('/');
   const chooserPromise = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Open project folder' }).click();
   const chooser = await chooserPromise;
-  await chooser.setFiles(resolve('tests/fixtures'));
+  await chooser.setFiles(folder);
   await expect(page.getByRole('button', { name: /Open another model.*animated\.kea3d/ })).toBeVisible();
 });
 
