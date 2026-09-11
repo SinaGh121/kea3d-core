@@ -1,3 +1,4 @@
+import { parseMotions, type ProjectMotion } from './motionFormat';
 export const KEA3D_PROJECT_SCHEMA = 'https://kea3d.com/schemas/project/v1.json';
 export const KEA3D_PROJECT_SCHEMA_V2 = 'https://kea3d.com/schemas/project/v2.json';
 export const KEA3D_PROJECT_MAX_BYTES = 2 * 1024 * 1024;
@@ -56,6 +57,7 @@ export interface Kea3dProjectAttachment {
 export interface Kea3dProjectInstance {
   id: string;
   resource: string;
+  materialImages?: { material: string; image: string }[];
   attachment?: Kea3dProjectAttachment;
   [key: string]: unknown;
 }
@@ -68,6 +70,7 @@ export interface Kea3dProjectDocument {
   rootInstance: string;
   resources: Kea3dProjectResource[];
   instances: Kea3dProjectInstance[];
+  motions?: ProjectMotion[];
   [key: string]: unknown;
 }
 
@@ -111,7 +114,7 @@ export function normalizeProjectResourceUri(value: unknown, label = 'Resource UR
   const segments = uri.split('/');
   if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) fail(`${label} contains an unsafe path segment.`);
   if (segments.some((segment) => !/^[A-Za-z0-9 _.,+@()'&-]+$/.test(segment))) fail(`${label} contains an unsupported path character.`);
-  if (!uri.toLowerCase().endsWith('.glb')) fail(`${label} must reference a GLB file in version 1.`);
+  if (!/\.(glb|png|jpe?g)$/i.test(uri)) fail(`${label} must reference a GLB, PNG or JPEG file.`);
   return uri;
 }
 
@@ -189,7 +192,19 @@ function parseInstances(value: unknown, version: 1 | 2): Kea3dProjectInstance[] 
     ids.add(id);
     const resource = projectId(record.resource, `instances[${index}].resource`);
     const attachment = record.attachment === undefined ? undefined : parseAttachment(record.attachment, index, version);
-    return { ...record, id, resource, ...(attachment ? { attachment } : {}) } as Kea3dProjectInstance;
+    let materialImages: Kea3dProjectInstance['materialImages'];
+    if (record.materialImages !== undefined) {
+      if (version !== 2 || !Array.isArray(record.materialImages) || record.materialImages.length > 64) fail('materialImages requires version 2 and at most 64 entries.');
+      const names = new Set<string>();
+      materialImages = record.materialImages.map(value => {
+        const entry = objectRecord(value, 'materialImages entry');
+        const material = boundedString(entry.material, 'material', 256);
+        if (names.has(material)) fail('materialImages contains a duplicate material.');
+        names.add(material);
+        return { material, image: projectId(entry.image, 'image resource') };
+      });
+    }
+    return { ...record, id, resource, ...(attachment ? { attachment } : {}), ...(materialImages ? { materialImages } : {}) } as Kea3dProjectInstance;
   });
 }
 
@@ -201,6 +216,15 @@ function validateGraph(document: Kea3dProjectDocument): void {
     if (id) joints.add(id);
   }
   const resourceIds = new Set(document.resources.map((resource) => resource.id));
+  for (const instance of document.instances) {
+    const model = document.resources.find(r => r.id === instance.resource);
+    if (model && !/\.glb$/i.test(model.uri)) fail('Instance resources must be GLB models.');
+    for (const entry of instance.materialImages ?? []) {
+      const image = document.resources.find(r => r.id === entry.image);
+      if (!image || !/\.(png|jpe?g)$/i.test(image.uri)) fail('Material images must reference PNG or JPEG resources.');
+    }
+  }
+  if (document.version === 1 && document.resources.some(r => !/\.glb$/i.test(r.uri))) fail('Image resources require version 2.');
   const instanceById = new Map(document.instances.map((instance) => [instance.id, instance]));
   const root = instanceById.get(document.rootInstance);
   if (!root) fail(`rootInstance "${document.rootInstance}" does not exist.`);
@@ -250,6 +274,10 @@ export function parseKea3dProjectJson(json: string): Kea3dProjectDocument {
     instances: parseInstances(record.instances, record.version),
   } as Kea3dProjectDocument;
   validateGraph(document);
+  if (record.motions !== undefined) {
+    if (record.version !== 2) fail('motions require version 2.');
+    document.motions = parseMotions(record.motions);
+  }
   return document;
 }
 
@@ -325,7 +353,7 @@ export function resolveProjectResourceFiles(
   projectFile: File,
   files: readonly File[],
 ): Map<string, File> {
-  const referencedResourceIds = new Set(project.instances.map((instance) => instance.resource));
+  const referencedResourceIds = projectResourceIds(project);
   const resolved = new Map<string, File>();
   const issues: ProjectResourceRecoveryIssue[] = [];
   for (const resource of project.resources) {
@@ -383,11 +411,17 @@ export function removeProjectResources(
       }
     }
   }
-  const instances = project.instances.filter((instance) => !removedInstances.has(instance.id));
-  const retainedResourceIds = new Set(instances.map((instance) => instance.resource));
+  const instances = project.instances.filter((instance) => !removedInstances.has(instance.id)).map(instance => ({ ...instance,
+    ...(instance.materialImages ? { materialImages: instance.materialImages.filter(entry => !resourceIds.has(entry.image)) } : {}),
+  }));
+  const retainedResourceIds = projectResourceIds({ instances });
   return parseKea3dProjectJson(JSON.stringify({
     ...project,
     resources: project.resources.filter((resource) => retainedResourceIds.has(resource.id)),
     instances,
   }));
+}
+
+export function projectResourceIds(project: Pick<Kea3dProjectDocument, 'instances'>): Set<string> {
+  return new Set(project.instances.flatMap(instance => [instance.resource, ...(instance.materialImages ?? []).map(entry => entry.image)]));
 }

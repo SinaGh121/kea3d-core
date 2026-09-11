@@ -1,6 +1,6 @@
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { createArchiveEntryFilter, isSafeArchivePath, maxArchiveExtractedBytes } from '@/viewer/archiveSafety';
-import { decodeKea3dProject, serializeKea3dProject, type Kea3dProjectSession } from './projectFormat';
+import { decodeKea3dProject, serializeKea3dProject, projectResourceIds, type Kea3dProjectSession } from './projectFormat';
 
 export const KEA3D_PACKAGE_EXTENSION = 'kea3dp';
 export const KEA3D_PACKAGE_MANIFEST = 'project.kea3d';
@@ -109,7 +109,7 @@ export function decodeKea3dPackage(buffer: ArrayBuffer): {
   const paths = Object.keys(archive);
   if (!Object.hasOwn(archive, KEA3D_PACKAGE_MANIFEST)) archiveError(`exactly one root ${KEA3D_PACKAGE_MANIFEST} manifest is required.`);
   const document = decodeKea3dProject(exactBuffer(archive[KEA3D_PACKAGE_MANIFEST]));
-  const referencedIds = new Set(document.instances.map((instance) => instance.resource));
+  const referencedIds = projectResourceIds(document);
   const expectedPaths = new Set([KEA3D_PACKAGE_MANIFEST]);
   const resourceFiles = new Map<string, File>();
   for (const resource of document.resources) {
@@ -117,7 +117,7 @@ export function decodeKea3dPackage(buffer: ArrayBuffer): {
     const data = archive[resource.uri];
     if (!data) archiveError(`required resource "${resource.uri}" is missing.`);
     expectedPaths.add(resource.uri);
-    resourceFiles.set(resource.id, packagedFile(resource.uri, data, 'model/gltf-binary'));
+    resourceFiles.set(resource.id, packagedFile(resource.uri, data, /\.png$/i.test(resource.uri) ? 'image/png' : /\.jpe?g$/i.test(resource.uri) ? 'image/jpeg' : 'model/gltf-binary'));
   }
   const unexpected = paths.find((path) => !expectedPaths.has(path));
   if (unexpected) archiveError(`unexpected entry "${unexpected}" is not referenced by the manifest.`);
@@ -127,7 +127,7 @@ export function decodeKea3dPackage(buffer: ArrayBuffer): {
 
 export async function encodeKea3dPackage(session: Kea3dProjectSession): Promise<Uint8Array> {
   const manifest = new TextEncoder().encode(serializeKea3dProject(session.document));
-  const referencedIds = new Set(session.document.instances.map((instance) => instance.resource));
+  const referencedIds = projectResourceIds(session.document);
   const entries: Array<[string, Uint8Array, 0 | 6]> = [[KEA3D_PACKAGE_MANIFEST, manifest, 6]];
   let totalBytes = manifest.byteLength;
   for (const resource of session.document.resources) {

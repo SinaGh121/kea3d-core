@@ -14,7 +14,10 @@ import { sanitizeCadImportResult } from './cadResult';
 import { consumePreparedModel } from './preparedModel';
 import { changedProjectResourceIssue, decodeKea3dProject, KEA3D_PROJECT_MAX_BYTES, ProjectResourceRecoveryError, resolveProjectResourceFiles, type Kea3dProjectDocument, type Kea3dProjectSession, type ProjectResourceRecoveryIssue } from '../project/projectFormat';
 import { buildFixedAssemblyScene } from '../project/assemblyScene';
+import { applyMaterialImages, loadProjectImages } from '../project/materialImages';
 import { disposeObject3D } from './disposeObject';
+import { MotionPlayer, type MotionResolver } from '../project/motionPlayer';
+import { sceneMotionResolver } from '../project/motionScene';
 
 interface LoadedModelSource {
   scene: Object3D;
@@ -25,6 +28,7 @@ interface LoadedModelSource {
   upAxis: UpAxis;
   forwardAxis?: ForwardAxis;
   project?: Kea3dProjectSession;
+  motionResolver?: MotionResolver;
 }
 
 async function verifyProjectResourceIntegrity(
@@ -110,10 +114,21 @@ export async function loadModelFiles(
       const resourceFile = root && resourceFiles.get(root.resource);
       if (!resourceFile) throw new Error('Invalid Kea3D project: the root resource could not be resolved.');
       const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
+      try {
+        const images = await loadProjectImages(project, resourceFiles, signal);
+        try { applyMaterialImages(gltf.scene, root, images); }
+        finally { images.forEach(texture => texture.dispose()); }
+      } catch (error) { disposeObject3D(gltf.scene); throw error; }
       if (!gltf.scene.name.trim()) gltf.scene.name = project.name;
+      let motionResolver: MotionResolver;
+      try {
+        motionResolver = sceneMotionResolver(gltf.scene, project, new Map([[root.resource, gltf.animations]]));
+        for (const motion of project.motions ?? []) new MotionPlayer(motion, motionResolver);
+      } catch (error) { disposeObject3D(gltf.scene); throw error; }
       return {
+        motionResolver,
         scene: gltf.scene,
-        animations: gltf.animations,
+        animations: project.motions?.length ? [] : gltf.animations,
         mainFile: projectFile,
         totalSize: projectFile.size + resourceFile.size,
         sourceUnit: 'm',
@@ -123,15 +138,26 @@ export async function loadModelFiles(
     }
 
     const resourceScenes = new Map<string, Object3D>();
+    const resourceClips = new Map<string, AnimationClip[]>();
     try {
       for (const [resourceId, resourceFile] of resourceFiles) {
+        if (!project.instances.some(instance => instance.resource === resourceId)) continue;
         throwIfLoadCancelled(signal);
         const { gltf } = await loadGltfFiles([resourceFile], onProgress, renderer, signal);
         resourceScenes.set(resourceId, gltf.scene);
-        if (gltf.animations.length > 0) throw new Error(`Project resource "${resourceId}" contains animation. Animated assembly instances are not supported yet.`);
+        resourceClips.set(resourceId, gltf.animations);
+        if (gltf.animations.length && !project.motions?.length) throw new Error(`Animated assembly resource "${resourceId}" requires a project frame motion.`);
       }
+      const images = await loadProjectImages(project, resourceFiles, signal);
+      let scene: Object3D;
+      try { scene = buildFixedAssemblyScene(project, resourceScenes, images); }
+      finally { images.forEach(texture => texture.dispose()); }
+      const motionResolver = sceneMotionResolver(scene, project, resourceClips);
+      try { for (const motion of project.motions ?? []) new MotionPlayer(motion, motionResolver); }
+      catch (error) { disposeObject3D(scene); throw error; }
       return {
-        scene: buildFixedAssemblyScene(project, resourceScenes),
+        motionResolver,
+        scene,
         animations: [],
         mainFile: projectFile,
         totalSize: projectFile.size + [...new Set(resourceFiles.values())].reduce((total, file) => total + file.size, 0),

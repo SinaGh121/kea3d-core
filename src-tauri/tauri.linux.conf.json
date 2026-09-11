@@ -2,6 +2,11 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "bundle": {
     "targets": ["appimage", "deb", "rpm"],
+    "linux": {
+      "deb": {
+        "depends": ["libocct-data-exchange-7.6t64"]
+      }
+    },
     "externalBin": [
       "../native/cad-worker/bin/kea3d-cad-worker"
     ]

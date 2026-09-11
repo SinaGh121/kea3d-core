@@ -60,7 +60,9 @@ import { throwIfLoadCancelled } from './loadControl';
 import { validateImportedScene } from './validateImportedScene';
 import { defaultMaterialPresetOptions, findMaterialPreset, type MaterialPreset, type MaterialPresetOptions } from './materialPresets';
 import { CommandHistory, type ReversibleCommand } from '../commandHistory';
-import { applyAssemblyJoint, assemblyJointFrame, assemblyInstanceForObject, assemblyObjectForInstance } from '../project/assemblyScene';
+import { applyAssemblyJoint, assemblyJointFrame, assemblyInstanceForObject, assemblyObjectForInstance, assemblyJointPosition } from '../project/assemblyScene';
+import { MotionPlayer, type MotionResolver } from '../project/motionPlayer';
+import type { ProjectMotion } from '../project/motionFormat';
 import { JointDragControls } from './JointDragControls';
 import { constrainedJointPosition } from '../project/jointMotion';
 import type { Kea3dJoint } from '../project/projectFormat';
@@ -262,6 +264,11 @@ export class Viewer {
   private currentModel: Object3D | null = null;
   private progressivePreview: { scene: Object3D; container: Group } | null = null;
   private currentAnimations: AnimationClip[] = [];
+  private projectMotions: ProjectMotion[] = [];
+  private motionResolver?: MotionResolver;
+  private motionPlayer?: MotionPlayer;
+  private motionIndex = 0;
+  private motionRebase = false;
   private animationMixer: AnimationMixer | null = null;
   private animationAction: AnimationAction | null = null;
   private animationPlaying = false;
@@ -291,6 +298,11 @@ export class Viewer {
     return this.selectedObjects.length === 1 ? assemblyInstanceForObject(this.selectedObjects[0]) : undefined;
   }
 
+  currentJoint(instance: string, joint: Kea3dJoint | undefined): Kea3dJoint | undefined {
+    if (!joint || !this.currentModel) return joint;
+    return { ...joint, state: { position: assemblyJointPosition(this.currentModel, instance) ?? joint.state.position } };
+  }
+
   stopJointDrag(): void {
     const drag = this.jointDrag; this.jointDrag = null; drag?.dispose();
     this.cancelJointPreview();
@@ -313,7 +325,12 @@ export class Viewer {
       },
       value => { this.previewJoint(instance, joint, { ...joint, state: { position: value } }); notify(value); },
       value => commit({ ...joint, state: { position: value } }),
-      () => { this.cancelJointPreview(); notify(joint.state.position); }, () => this.invalidate());
+      () => { this.cancelJointPreview(); notify(joint.state.position); }, () => this.invalidate(), () => {
+        this.setAnimationPlaying(false);
+        this.motionRebase = true;
+        joint = { ...joint, state: { position: assemblyJointPosition(this.currentModel!, instance) ?? joint.state.position } };
+        return joint.state.position;
+      });
   }
 
   cancelJointPreview(): void {
@@ -322,8 +339,10 @@ export class Viewer {
   }
 
   previewJoint(instance: string, before: Kea3dJoint | undefined, after: Kea3dJoint | undefined): void {
+    this.setAnimationPlaying(false); this.motionRebase = true;
     constrainedJointPosition(before, after);
     this.cancelJointPreview();
+    before = this.currentJoint(instance, before);
     const root = this.currentModel;
     if (!root) return;
     if (this.explodeFactor !== 0) throw new Error('Reset Explode before editing a connection.');
@@ -506,6 +525,8 @@ export class Viewer {
     this.clearModel();
     this.currentModel = scene;
     this.currentAnimations = animations;
+    this.projectMotions = loaded.project?.document.motions ?? [];
+    this.motionResolver = loaded.motionResolver;
     this.initialSourceUnit = sourceUnit;
     this.initialUpAxis = upAxis;
     this.initialForwardAxis = loaded.forwardAxis ?? defaultForwardAxis(upAxis);
@@ -535,7 +556,9 @@ export class Viewer {
     return {
       info,
       sceneTree,
-      animations: this.currentAnimations.map((clip, index) => ({
+      animations: this.projectMotions.length && this.motionResolver ? this.projectMotions.map(motion => ({
+        name: motion.name, duration: new MotionPlayer(motion, this.motionResolver!).duration, kind: 'motion' as const,
+      })) : this.currentAnimations.map((clip, index) => ({
         name: clip.name.trim() || `Animation ${index + 1}`,
         duration: clip.duration,
       })),
@@ -1028,6 +1051,14 @@ export class Viewer {
   }
 
   setAnimationClip(index: number): void {
+    if (this.projectMotions.length && this.motionResolver) {
+      const motion = this.projectMotions[index];
+      if (!motion) return;
+      const player = new MotionPlayer(motion, this.motionResolver);
+      this.motionPlayer = player; this.motionIndex = index; this.motionRebase = false;
+      this.animationPlaying = false; this.animationLoop = player.repeat === 'forever';
+      this.notifyAnimationChange(); this.invalidate(); return;
+    }
     if (!this.animationMixer || !this.currentModel) return;
     const clip = this.currentAnimations[index];
     if (!clip) return;
@@ -1043,6 +1074,17 @@ export class Viewer {
   }
 
   setAnimationPlaying(playing: boolean): void {
+    if (this.motionPlayer) {
+      if (playing && this.explodeFactor !== 0) throw new Error('Reset Explode before playing a motion.');
+      if (playing && this.motionRebase) {
+        const { repeat, speed } = this.motionPlayer;
+        this.setAnimationClip(this.motionIndex);
+        this.motionPlayer.repeat = repeat; this.motionPlayer.speed = speed;
+      }
+      if (playing) this.motionPlayer.play(); else this.motionPlayer.playing = false;
+      this.animationPlaying = playing; this.lastFrameTimestamp = 0;
+      this.notifyAnimationChange(); this.invalidate(); return;
+    }
     if (!this.animationAction) return;
     if (playing && this.animationAction.time >= this.animationAction.getClip().duration) {
       this.animationAction.reset();
@@ -1056,6 +1098,10 @@ export class Viewer {
   }
 
   seekAnimation(time: number): void {
+    if (this.motionPlayer && this.explodeFactor !== 0) return;
+    if (this.motionPlayer && Number.isFinite(time)) {
+      this.motionPlayer.seek(time); this.notifyAnimationChange(); this.invalidate(); return;
+    }
     if (!this.animationAction || !Number.isFinite(time)) return;
     this.animationAction.time = MathUtils.clamp(time, 0, this.animationAction.getClip().duration);
     this.animationMixer?.update(0);
@@ -1064,6 +1110,11 @@ export class Viewer {
   }
 
   resetAnimation(): void {
+    if (this.motionPlayer && this.explodeFactor !== 0) return;
+    if (this.motionPlayer) {
+      this.motionPlayer.restart(); this.animationPlaying = false; this.motionRebase = false;
+      this.notifyAnimationChange(); this.invalidate(); return;
+    }
     if (!this.animationAction) return;
     this.animationAction.reset().play();
     this.animationAction.paused = true;
@@ -1075,10 +1126,13 @@ export class Viewer {
 
   setAnimationLoop(loop: boolean): void {
     this.animationLoop = loop;
+    if (this.motionPlayer) this.motionPlayer.repeat = loop ? 'forever' : 1;
     this.configureAnimationLoop();
+    if (this.motionPlayer) this.notifyAnimationChange();
   }
 
   setAnimationSpeed(speed: number): void {
+    if (this.motionPlayer && Number.isFinite(speed) && speed > 0) { this.motionPlayer.speed = speed; return; }
     if (!this.animationMixer || !Number.isFinite(speed) || speed <= 0) return;
     this.animationMixer.timeScale = speed;
   }
@@ -1150,6 +1204,7 @@ export class Viewer {
   }
 
   undoLastChange(): MaterialEditState {
+    if (this.motionPlayer) { this.setAnimationPlaying(false); this.motionRebase = true; }
     this.cancelJointPreview();
     this.cancelMaterialPreview();
     this.commandHistory.undo();
@@ -1157,6 +1212,7 @@ export class Viewer {
   }
 
   redoLastChange(): MaterialEditState {
+    if (this.motionPlayer) { this.setAnimationPlaying(false); this.motionRebase = true; }
     this.cancelJointPreview();
     this.cancelMaterialPreview();
     this.commandHistory.redo();
@@ -1221,6 +1277,7 @@ export class Viewer {
   }
 
   setExplodeFactor(factor: number): void {
+    if (this.motionPlayer) this.setAnimationPlaying(false);
     this.explodeFactor = MathUtils.clamp(factor, 0, 1);
     this.applyExplosionPositions(this.explodeFactor);
     this.refreshModelLayout();
@@ -1377,7 +1434,14 @@ export class Viewer {
       ? 0
       : Math.min(Math.max((timestamp - this.lastFrameTimestamp) / 1_000, 0), 0.1);
     this.lastFrameTimestamp = timestamp;
-    if (this.animationMixer && this.animationAction && this.animationPlaying) {
+    if (this.motionPlayer && this.animationPlaying) {
+      this.motionPlayer.update(delta);
+      this.animationPlaying = this.motionPlayer.playing;
+      this.animationNotifyElapsed += delta;
+      if (this.animationNotifyElapsed >= 1 / 15 || !this.animationPlaying) {
+        this.notifyAnimationChange(); this.animationNotifyElapsed = 0;
+      }
+    } else if (this.animationMixer && this.animationAction && this.animationPlaying) {
       this.animationMixer.update(delta);
       this.animationNotifyElapsed += delta;
       if (!this.animationAction.isRunning()) this.animationPlaying = false;
@@ -1573,6 +1637,7 @@ export class Viewer {
   };
 
   private prepareAnimations(): void {
+    if (this.projectMotions.length && this.motionResolver) { this.setAnimationClip(0); return; }
     if (!this.currentModel || this.currentAnimations.length === 0) {
       this.notifyAnimationChange();
       return;
@@ -1592,11 +1657,14 @@ export class Viewer {
   private notifyAnimationChange(): void {
     this.onAnimationChange({
       playing: this.animationPlaying,
-      time: this.animationAction?.time ?? 0,
+      time: this.motionPlayer?.time ?? this.animationAction?.time ?? 0,
+      ...(this.motionPlayer ? { duration: this.motionPlayer.duration, loop: this.motionPlayer.repeat === 'forever' } : {}),
+      ...(this.motionPlayer ? { repeat: this.motionPlayer.repeat } : {}),
     });
   }
 
   private clearAnimations(): void {
+    this.motionPlayer = undefined; this.motionResolver = undefined; this.projectMotions = [];
     this.animationMixer?.stopAllAction();
     if (this.animationMixer && this.currentModel) this.animationMixer.uncacheRoot(this.currentModel);
     this.animationMixer = null;

@@ -71,11 +71,15 @@ export interface SceneNode {
 export interface AnimationClipInfo {
   name: string;
   duration: number;
+  kind?: 'motion';
 }
 
 export interface AnimationPlaybackState {
   playing: boolean;
   time: number;
+  duration?: number;
+  loop?: boolean;
+  repeat?: number | 'forever';
 }
 
 export interface MeasurementState {

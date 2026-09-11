@@ -13,10 +13,11 @@ export class JointDragControls {
   private readonly axis: Vector3;
   private readonly previousTabIndex: number;
   constructor(private readonly scene: Scene, private readonly canvas: HTMLCanvasElement,
-    private readonly camera: () => Camera, private readonly getFrame: () => Matrix4, private readonly joint: Kea3dJoint,
+    private readonly camera: () => Camera, private readonly getFrame: () => Matrix4, private joint: Kea3dJoint,
     private readonly hitSelectedChild: (event: PointerEvent) => boolean,
     private readonly preview: (value: number) => void, private readonly commit: (value: number) => void,
-    private readonly rollback: () => void, private readonly invalidate: () => void) {
+    private readonly rollback: () => void, private readonly invalidate: () => void,
+    private readonly begin?: () => number) {
     this.value = joint.state.position;
     this.previousTabIndex = canvas.tabIndex; canvas.tabIndex = 0;
     this.axis = new Vector3(joint.axis === 'x' ? 1 : 0, joint.axis === 'y' ? 1 : 0, joint.axis === 'z' ? 1 : 0);
@@ -51,6 +52,11 @@ export class JointDragControls {
     const p = this.normalized(event);
     if (event.type === 'pointerdown' && event.button === 0 && this.pointer === null) {
       if (event.ctrlKey || event.metaKey || event.shiftKey || !this.hitSelectedChild(event)) return;
+      if (this.begin) {
+        this.value = this.begin();
+        this.joint = { ...this.joint, state: { position: this.value } };
+        this.syncProxy();
+      }
       this.control.axis = this.joint.axis.toUpperCase() as 'X' | 'Y' | 'Z';
       this.control.getHelper().updateMatrixWorld(true);
       this.control.pointerDown(p);

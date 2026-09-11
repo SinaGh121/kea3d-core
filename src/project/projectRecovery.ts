@@ -34,9 +34,9 @@ function fileAtPath(file: File, relativePath: string): File {
 }
 
 export function locateProjectResources(recovery: RecoveryState, fileList: FileList | File[]): { files: File[]; matchedAll: boolean } {
-  const selected = Array.from(fileList).filter((file) => /\.glb$/i.test(file.name));
+  const selected = Array.from(fileList).filter((file) => /\.(glb|png|jpe?g)$/i.test(file.name));
   const projectFile = recovery.files.find((file) => /\.kea3d$/i.test(file.name));
-  if (!projectFile || selected.length === 0) throw new Error('Choose one or more GLB resource files.');
+  if (!projectFile || selected.length === 0) throw new Error('Choose GLB, PNG or JPEG resource files.');
 
   const replacements: File[] = [];
   const matchedIds = new Set<string>();

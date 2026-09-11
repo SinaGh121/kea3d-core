@@ -866,7 +866,7 @@ test('single-resource Kea3D projects open locally and missing resources preserve
   await expect(page.getByRole('button', { name: /Open another model.*fixture\.kea3d/ })).toBeVisible();
 
   await expect(page.getByText('Project resources', { exact: true })).toBeVisible();
-  await page.getByLabel('Locate project GLB resources').setInputFiles({
+  await page.getByLabel('Locate project resources', { exact: true }).setInputFiles({
     name: 'replacement.glb',
     mimeType: 'model/gltf-binary',
     buffer: triangleModel(),

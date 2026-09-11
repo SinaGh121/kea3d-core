@@ -113,6 +113,13 @@ struct ProjectResourceProbe {
 #[derive(Deserialize)]
 struct ProjectInstanceProbe {
     resource: String,
+    #[serde(default, rename = "materialImages")]
+    material_images: Vec<ProjectMaterialImageProbe>,
+}
+
+#[derive(Deserialize)]
+struct ProjectMaterialImageProbe {
+    image: String,
 }
 
 #[derive(Deserialize)]
@@ -316,7 +323,9 @@ fn project_resource_uri_is_safe(uri: &str) -> bool {
         || uri.starts_with('/')
         || uri.starts_with("//")
         || uri.get(1..2) == Some(":")
-        || !uri.to_ascii_lowercase().ends_with(".glb")
+        || ![".glb", ".png", ".jpg", ".jpeg"]
+            .iter()
+            .any(|ext| uri.to_ascii_lowercase().ends_with(ext))
     {
         return false;
     }
@@ -381,7 +390,14 @@ fn project_open_files(state: &NativeOpenState, manifest_path: PathBuf) -> Vec<Pe
     let referenced = project
         .instances
         .into_iter()
-        .map(|instance| instance.resource)
+        .flat_map(|instance| {
+            std::iter::once(instance.resource).chain(
+                instance
+                    .material_images
+                    .into_iter()
+                    .map(|entry| entry.image),
+            )
+        })
         .collect::<HashSet<_>>();
     let Some(project_directory) = manifest_path.parent() else {
         return files;

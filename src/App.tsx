@@ -31,7 +31,7 @@ import { defaultMaterialPresetOptions, findMaterialPreset, finishRoughness, mate
 import { isNativeShell } from '@/nativeShell';
 import { useReleaseUpdates } from '@/project/useReleaseUpdates';
 import type { AnimationClipInfo, CameraProjection, CameraState, DisplayMode, LightingPreset, LightingSettings, LinearUnit, LoadProgress, MaterialApplyScope, MaterialEditState, MeasurementState, ModelInfo, RendererInfoSnapshot, RotationMode, SceneNode, SelectionInfo, UpAxis, ViewerTheme } from '@/viewer/types';
-import type { Kea3dJoint, Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
+import type { Kea3dJoint, Kea3dProjectInstance, Kea3dProjectSession, ProjectResourceRecoveryIssue } from '@/project/projectFormat';
 import type { AnchorEditInput } from '@/project/componentAnchors';
 import { createLoadMetricTracker, type LoadMetricStatus } from '@/performance/loadMetrics';
 import { searchScene, type SceneFilter } from '@/project/sceneSearch';
@@ -270,7 +270,8 @@ const compactAdjustHeight = 'min(52dvh, 32rem)';
 const compactSceneHeight = 'min(52dvh, 30rem)';
 const compactAnimationHeight = 'min(38dvh, 18rem)';
 
-function ResponsivePanel({ title, description, onClose, children, footer, desktopClassName, compactFixedHeight, compactMode = 'sheet', compactHeight = compactWorkspaceHeight, compactWorkspaceExpanded = false, onCompactWorkspaceExpandedChange, contentClassName, titleClassName }: {
+function ResponsivePanel({ title, description, onClose, children, footer, headerAction, desktopClassName, compactFixedHeight, compactMode = 'sheet', compactHeight = compactWorkspaceHeight, compactWorkspaceExpanded = false, onCompactWorkspaceExpandedChange, contentClassName, titleClassName }: {
+  headerAction?: ReactNode;
   footer?: ReactNode;
   title: string;
   description?: string;
@@ -314,6 +315,7 @@ function ResponsivePanel({ title, description, onClose, children, footer, deskto
               {description && <p className="sr-only">{description}</p>}
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {headerAction}
               {onCompactWorkspaceExpandedChange && !sideWorkspace && (
                 <Button
                   variant="ghost"
@@ -360,7 +362,7 @@ function ResponsivePanel({ title, description, onClose, children, footer, deskto
           <CardTitle className={cn('text-sm font-semibold', titleClassName)}>{title}</CardTitle>
           {description && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{description}</p>}
         </div>
-        <CardAction><Button variant="ghost" size="icon-sm" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X /></Button></CardAction>
+        <CardAction className="flex items-center gap-1">{headerAction}<Button variant="ghost" size="icon-sm" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X /></Button></CardAction>
       </CardHeader>
       <CardContent data-testid="responsive-panel-scroll" className={cn('min-h-0 overflow-y-auto overscroll-contain', contentClassName)}>{children}</CardContent>
       {footer && <div className="shrink-0 border-t px-4 pt-3">{footer}</div>}
@@ -557,6 +559,11 @@ export default function App() {
   const [changingThumbnailProvider, setChangingThumbnailProvider] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [projectRecovery, setProjectRecovery] = useState<ProjectResourceRecoveryState | null>(null);
+  const recoveryRef = useRef(projectRecovery);
+  useEffect(() => { recoveryRef.current = projectRecovery; }, [projectRecovery]);
+  const [folderMissing, setFolderMissing] = useState<string[]>([]);
+  const [folderMessage, setFolderMessage] = useState('');
+  const [folderBusy, setFolderBusy] = useState(false);
   const [projectSession, setProjectSession] = useState<Kea3dProjectSession | null>(null);
   const [infoVisible, setInfoVisible] = useState(initialSettings.panels.modelInfoVisible);
   const [gridVisible, setGridVisible] = useState(initialSettings.viewer.gridVisible);
@@ -610,9 +617,13 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [animations, setAnimations] = useState<AnimationClipInfo[]>([]);
   const [animationVisible, setAnimationVisible] = useState(false);
+  const [animationDetails, setAnimationDetails] = useState(true);
   const [animationIndex, setAnimationIndex] = useState(0);
   const [animationPlaying, setAnimationPlaying] = useState(false);
   const [animationTime, setAnimationTime] = useState(0);
+  const [motionDuration, setMotionDuration] = useState<number | undefined>();
+  const [motionRepeat, setMotionRepeat] = useState<number | 'forever' | undefined>();
+  const [adjustJointInstances, setAdjustJointInstances] = useState<Kea3dProjectInstance[] | null>(null);
   const [animationLoop, setAnimationLoop] = useState(true);
   const [animationSpeed, setAnimationSpeed] = useState(1);
   const [sectionVisible, setSectionVisible] = useState(false);
@@ -724,6 +735,9 @@ export default function App() {
       }, (state) => {
         setAnimationPlaying(state.playing);
         setAnimationTime(state.time);
+        setMotionDuration(state.duration);
+        setMotionRepeat(state.repeat);
+        if (state.loop !== undefined) setAnimationLoop(state.loop);
       }, (state) => {
         setMeasurement(state);
         setMeasurementCopied(false);
@@ -902,6 +916,8 @@ export default function App() {
     loadAbortRef.current?.abort();
     setProgressiveCadVisible(false);
     setProjectRecovery(null);
+    setFolderMissing([]);
+    setFolderMessage('');
     const controller = new AbortController();
     loadAbortRef.current = controller;
     const loadingFileName = files.find((file) => /\.(kea3dp|kea3d|glb|gltf|stl|3mf|obj|ply|fbx|dae|step|stp|iges|igs|brep)$/i.test(file.name))?.name ?? 'Local model';
@@ -972,6 +988,7 @@ export default function App() {
       setMaterialFinish(null);
       setMaterialEditState(emptyMaterialEditState);
       setAnimations(loaded.animations);
+      setAnimationDetails(!compactLayout);
       setAnimationVisible(!compactLayout && loaded.animations.length > 0);
       if (compactLayout) {
         setInfoVisible(false);
@@ -981,7 +998,7 @@ export default function App() {
       setAnimationIndex(0);
       setAnimationPlaying(false);
       setAnimationTime(0);
-      setAnimationLoop(true);
+      setAnimationLoop(loaded.project?.document.motions?.length ? loaded.project.document.motions[0].repeat === 'forever' : true);
       setAnimationSpeed(1);
       setSectionVisible(false);
       setSectionEnabled(false);
@@ -1344,6 +1361,25 @@ export default function App() {
     }
   }, [loadFiles, projectRecovery]);
 
+  const allowProjectFolder = async () => {
+    if (!projectRecovery || folderBusy) return;
+    const recovery = projectRecovery;
+    setFolderBusy(true);
+    setFolderMissing([]);
+    setFolderMessage('');
+    try {
+      const { chooseAndroidProjectResources } = await import('@/project/androidProjectFolder');
+      const result = await chooseAndroidProjectResources(recovery.issues.map(issue => issue.uri));
+      if (recoveryRef.current !== recovery) return;
+      if (!result) { setFolderMessage('Folder selection was cancelled. No folder was checked.'); return; }
+      if (result.files.length) await recoverProjectWithFiles(result.files);
+      setFolderMissing(result.missing);
+      setFolderMessage(result.missing.length ? 'Folder checked. Some resources were not found in the selected folder.' : 'Folder access granted.');
+    } catch (error) {
+      if (recoveryRef.current === recovery) setFolderMessage(error instanceof Error ? error.message : String(error));
+    } finally { setFolderBusy(false); }
+  };
+
   const rewriteProjectForRecovery = useCallback(async (mode: 'accept' | 'remove') => {
     if (!projectRecovery) return;
     try {
@@ -1473,7 +1509,8 @@ export default function App() {
     const { KEA3D_PROJECT_SCHEMA_V2, parseKea3dProjectJson } = await import('@/project/projectFormat');
     if (!projectSession) return;
     const previous = projectSession.document;
-    const before = previous.instances.find(i => i.id === id)?.attachment?.joint;
+    viewerRef.current?.cancelJointPreview();
+    const before = viewerRef.current?.currentJoint(id, previous.instances.find(i => i.id === id)?.attachment?.joint);
     if (JSON.stringify(before) === JSON.stringify(joint)) { cancelJointPreview(); return; }
     const next = parseKea3dProjectJson(JSON.stringify({
       ...previous, version: 2, $schema: KEA3D_PROJECT_SCHEMA_V2,
@@ -1481,6 +1518,7 @@ export default function App() {
     }));
     viewerRef.current?.commitJoint(id, before, joint, value => {
       setProjectSession(session => session ? { ...session, document: value === before ? previous : next } : session);
+      setAdjustJointInstances((value === before ? previous : next).instances);
     });
     setMaterialEditState(viewerRef.current?.getMaterialEditState() ?? emptyMaterialEditState);
     updateDimensions(viewerRef.current?.getDimensions() ?? [0, 0, 0]);
@@ -1581,6 +1619,10 @@ export default function App() {
       return;
     }
     setAdjustWorkspaceExpanded(false);
+    viewerRef.current?.setAnimationPlaying(false);
+    setAdjustJointInstances(projectSession?.document.instances.map(i => i.attachment?.joint ? {
+      ...i, attachment: { ...i.attachment, joint: viewerRef.current?.currentJoint(i.id, i.attachment.joint) },
+    } : i) ?? null);
     setAdjustVisible(true);
     if (next) { setTreeVisible(false); if (compactLayout) setInfoVisible(false); setExportVisible(false); setAnimationVisible(false); setSectionVisible(false); setSettingsVisible(false); setLightingVisible(false); if (materialVisible) setMaterialVisible(false); closeMeasurement(); }
   };
@@ -1754,15 +1796,19 @@ export default function App() {
     setCalibrationValue('');
   };
   const selectAnimation = (index: number) => {
+    try { viewerRef.current?.setAnimationClip(index); }
+    catch (error) { showError((error as Error).message); return; }
     setAnimationIndex(index);
     setAnimationPlaying(false);
     setAnimationTime(0);
-    viewerRef.current?.setAnimationClip(index);
+    setAnimationSpeed(1);
+    viewerRef.current?.setAnimationSpeed(1);
   };
   const toggleAnimationPlayback = () => {
     const next = !animationPlaying;
     setAnimationPlaying(next);
-    viewerRef.current?.setAnimationPlaying(next);
+    try { viewerRef.current?.setAnimationPlaying(next); }
+    catch (error) { setAnimationPlaying(false); showError((error as Error).message); }
   };
   const changeAnimationLoop = () => {
     const next = !animationLoop;
@@ -1854,7 +1900,7 @@ export default function App() {
     try {
       const blob = await viewerRef.current.exportGlb({
         onlyVisible: exportScope === 'visible',
-        includeAnimations: exportAnimations,
+        includeAnimations: exportAnimations && !animations.some((clip) => clip.kind === 'motion'),
       });
       const suggestedName = `${modelInfo.fileName.replace(/\.[^.]+$/, '')}-${projectSession ? 'flattened' : 'fixed'}.glb`;
       if (nativeShell) {
@@ -1877,7 +1923,7 @@ export default function App() {
         link.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
       }
-      if (viewerRef.current === exportingViewer && exportingViewer.getDocumentCheckpoint() === checkpoint && exportScope === 'all' && (exportAnimations || animations.length === 0)) {
+      if (viewerRef.current === exportingViewer && exportingViewer.getDocumentCheckpoint() === checkpoint && exportScope === 'all' && !animations.some((clip) => clip.kind === 'motion') && (exportAnimations || animations.length === 0)) {
         savedCheckpointRef.current = checkpoint;
       }
       toast.success(exportScope === 'visible' ? 'Visible objects exported to GLB' : projectSession ? 'Project flattened to GLB' : 'Complete model exported to GLB');
@@ -2028,6 +2074,9 @@ export default function App() {
   }, [adjustVisible, animationVisible, chooseModelFiles, closeAdjustPanel, closeMaterialPanel, closeMeasurement, compactLayerOpen, compactLayout, cycleDisplayMode, exportVisible, infoVisible, lightingVisible, materialVisible, measurementVisible, mobileToolsVisible, modelInfo, projectRecovery, redoMaterial, sectionVisible, settingsVisible, toggleGrid, toggleMaterialPanel, toggleProjection, toggleSelectionIsolation, toggleViewSelector, treeVisible, undoMaterial]);
 
   const activeAnimation = animations[animationIndex] ?? null;
+  const projectMotionPlayback = animations.some((clip) => clip.kind === 'motion');
+  const animationPanelHeight = animationDetails ? compactAnimationHeight : 'min(24dvh, 11rem)';
+  const activeAnimationDuration = motionDuration ?? activeAnimation?.duration ?? 0;
   const measurementValue = measurement.distance === null ? null : formatMetricLength(measurement.distance, displayUnit);
   const measurementInstruction = measurement.pointCount === 0
     ? 'Select the first point on the model'
@@ -2091,7 +2140,7 @@ export default function App() {
           : adjustVisible
             ? adjustWorkspaceExpanded ? compactWorkspaceExpandedHeight : compactAdjustHeight
             : animationVisible
-              ? compactAnimationHeight
+              ? animationPanelHeight
               : infoVisible ? compactMeasurementHeight : 0;
   const hasSideWorkspace = sideWorkspace && compactViewportBottom !== 0 && !projectRecovery;
   const viewerActions: ViewerAction[] = [
@@ -2110,7 +2159,7 @@ export default function App() {
     { id: 'material', label: 'Set material', group: 'Appearance', priority: selectionInfo?.meshes ? 4.5 : 12, icon: <PaintBucket />, active: materialVisible, disabledReason: !selectionInfo?.meshes && !materialEditState.previewActive ? 'Select a mesh; anchors have no surface material' : undefined, run: toggleMaterialPanel },
     { id: 'section', label: 'Section cut', group: 'Inspect', priority: 13, icon: <ScissorsLineDashed />, active: sectionVisible, run: toggleSectionPanel },
     { id: 'adjust', label: 'Adjust model', group: 'Appearance', priority: 14, icon: <Move3D />, active: adjustVisible, run: toggleAdjustPanel },
-    { id: 'animation', label: 'Animations', group: 'Inspect', priority: 15, icon: <Play />, available: animations.length > 0, active: animationVisible, run: toggleAnimationPanel },
+    { id: 'animation', label: 'Animations', group: 'Inspect', priority: 3.5, icon: <Play />, available: animations.length > 0, active: animationVisible, run: toggleAnimationPanel },
     { id: 'export', label: 'Export model', shortLabel: 'Export', group: 'Output', priority: 16, icon: <Download />, active: exportVisible, run: toggleExportPanel },
     { id: 'share', label: sharedCopied ? 'View link copied' : 'Copy private view link', shortLabel: 'View link', group: 'Output', priority: 17, icon: <Share2 />, available: !nativeShell, run: () => void copyViewLink() },
     { id: 'png', label: 'Save PNG', group: 'Output', priority: 18, icon: <Camera />, run: () => void saveScreenshot() },
@@ -2144,7 +2193,7 @@ export default function App() {
             onChange={(event) => event.target.files && void loadFiles(event.target.files)} />
           <input ref={(element) => { projectFolderInputRef.current = element; element?.setAttribute('webkitdirectory', ''); }} className="sr-only" type="file" multiple accept={acceptedExtensions} aria-label="Choose Kea3D project folder"
             onChange={(event) => event.target.files && void loadFiles(event.target.files)} />
-          <input ref={projectRecoveryInputRef} className="sr-only" type="file" multiple accept=".glb,model/gltf-binary" aria-label="Locate project GLB resources"
+          <input ref={projectRecoveryInputRef} className="sr-only" type="file" multiple accept=".glb,.png,.jpg,.jpeg,model/gltf-binary,image/png,image/jpeg" aria-label="Locate project resources"
             onChange={(event) => { if (event.target.files) recoverProjectWithFiles(event.target.files); event.currentTarget.value = ''; }} />
           <input ref={settingsInputRef} className="sr-only" type="file" accept=".json,application/json" aria-label="Import Kea3D settings"
             onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSettings(file); }} />
@@ -2228,6 +2277,11 @@ export default function App() {
                 issues={projectRecovery.issues}
                 compact={compactLayout}
                 nativeShell={nativeShell}
+                android={androidNativeShell}
+                folderMissing={folderMissing}
+                folderMessage={folderMessage}
+                folderBusy={folderBusy}
+                onAllowFolder={androidNativeShell ? () => void allowProjectFolder() : undefined}
                 onClose={() => setProjectRecovery(null)}
                 onLocate={() => projectRecoveryInputRef.current?.click()}
                 onChooseFolder={chooseProjectFolder}
@@ -2738,7 +2792,7 @@ export default function App() {
               onCompactWorkspaceExpandedChange={setAdjustWorkspaceExpanded}
               contentClassName="grid min-h-0 gap-3 overflow-y-auto"
             >
-                {projectSession && <Suspense fallback={null}><JointControls instances={projectSession.document.instances}
+                {projectSession && <Suspense fallback={null}><JointControls instances={adjustJointInstances ?? projectSession.document.instances}
                   selectedInstance={viewerRef.current?.getSelectedAssemblyInstance()}
                   onPreview={previewJoint} onApply={applyJoint} onCancel={cancelJointPreview}
                   onStopDrag={() => viewerRef.current?.stopJointDrag()}
@@ -2869,10 +2923,11 @@ export default function App() {
               <label className="flex min-h-11 items-center justify-between gap-3">
                 <span>
                   <span className="block text-xs font-medium">Include animations</span>
-                  <span className="block text-[10px] text-muted-foreground">{animations.length > 0 ? `${animations.length} embedded ${animations.length === 1 ? 'clip' : 'clips'}` : 'No embedded animation clips'}</span>
+                  <span className="block text-[10px] text-muted-foreground">{projectMotionPlayback ? 'Project motions are not converted to GLB clips' : animations.length > 0 ? `${animations.length} embedded ${animations.length === 1 ? 'clip' : 'clips'}` : 'No embedded animation clips'}</span>
                 </span>
-                <Switch checked={exportAnimations && animations.length > 0} disabled={animations.length === 0} onCheckedChange={setExportAnimations} aria-label="Include animations" />
+                <Switch checked={exportAnimations && animations.length > 0 && !projectMotionPlayback} disabled={animations.length === 0 || projectMotionPlayback} onCheckedChange={setExportAnimations} aria-label="Include animations" />
               </label>
+              {projectMotionPlayback && <p className="text-xs text-muted-foreground">GLB saves the current pose only. Save as .kea3d or .kea3dp to preserve the motion definitions.</p>}
               <p className="text-[10px] leading-relaxed text-muted-foreground">Includes hierarchy, current transforms, and applied materials. Selection highlights, grid, section cut, and exploded-view spacing are not baked. GLB export never overwrites the project or component files.</p>
             </ResponsivePanel>
           )}
@@ -2880,25 +2935,27 @@ export default function App() {
           {modelInfo && animationVisible && activeAnimation && (
             <ResponsivePanel
               title="Animations"
-              description={`${animations.length} ${animations.length === 1 ? 'clip' : 'clips'} embedded in this model`}
+              headerAction={<Button variant="ghost" size="sm" className="min-h-11" aria-expanded={animationDetails} onClick={() => setAnimationDetails(!animationDetails)}>{animationDetails ? <ChevronDown /> : <ChevronUp />}{animationDetails ? 'Less' : 'Details'}</Button>}
+              description={activeAnimation.kind === 'motion' ? 'View-only project motion' : `${animations.length} ${animations.length === 1 ? 'clip' : 'clips'} embedded in this model`}
               onClose={() => setAnimationVisible(false)}
               desktopClassName="absolute top-20 right-5 z-20 w-[310px] gap-3 bg-card/92 shadow-2xl backdrop-blur-md"
               compactMode="workspace"
-              compactHeight={compactAnimationHeight}
+              compactHeight={animationPanelHeight}
               contentClassName="grid min-h-0 gap-3 overflow-y-auto"
             >
-                <Select value={String(animationIndex)} onValueChange={(value) => selectAnimation(Number(value))}>
+                {!animationDetails && <p className="truncate text-xs" title={activeAnimation.name}>{activeAnimation.name}</p>}
+                {animationDetails && <Select value={String(animationIndex)} onValueChange={(value) => selectAnimation(Number(value))}>
                   <SelectTrigger size="sm" className="w-full" aria-label="Animation clip"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {animations.map((clip, index) => <SelectItem key={`${clip.name}-${index}`} value={String(index)}>{clip.name}</SelectItem>)}
                   </SelectContent>
-                </Select>
-                <div className="grid gap-1.5">
-                  <Slider aria-label="Animation timeline" min={0} max={Math.max(activeAnimation.duration, 0.001)} step={0.01} value={[Math.min(animationTime, activeAnimation.duration)]} onValueChange={(values) => viewerRef.current?.seekAnimation(values[0] ?? 0)} />
-                  <div className="flex justify-between text-[10px] tabular-nums text-muted-foreground"><span>{formatTime(animationTime)}</span><span>{formatTime(activeAnimation.duration)}</span></div>
-                </div>
+                </Select>}
+                {animationDetails && <div className="grid gap-1.5">
+                  <Slider aria-label="Animation timeline" min={0} max={Math.max(activeAnimationDuration, 0.001)} step={0.01} value={[Math.min(animationTime, activeAnimationDuration)]} onValueChange={(values) => viewerRef.current?.seekAnimation(values[0] ?? 0)} />
+                  <div className="flex justify-between text-[10px] tabular-nums text-muted-foreground"><span>{formatTime(animationTime)}</span><span>{formatTime(activeAnimationDuration)}</span></div>
+                </div>}
                 <div className="grid grid-cols-[1fr_1fr_1fr_82px] gap-1.5">
-                  <Button variant="secondary" size="sm" aria-label="Restart animation" onClick={() => viewerRef.current?.resetAnimation()}><RotateCcw /></Button>
+                  <Button variant="secondary" size="sm" title="Return to start" aria-label="Restart animation" onClick={() => viewerRef.current?.resetAnimation()}><RotateCcw /></Button>
                   <Button variant="secondary" size="sm" aria-label={animationPlaying ? 'Pause animation' : 'Play animation'} onClick={toggleAnimationPlayback}>{animationPlaying ? <Pause /> : <Play />}</Button>
                   <Button variant={animationLoop ? 'default' : 'secondary'} size="sm" aria-label="Loop animation" aria-pressed={animationLoop} onClick={changeAnimationLoop}><Repeat2 /></Button>
                   <Select value={String(animationSpeed)} onValueChange={(value) => changeAnimationSpeed(Number(value))}>
@@ -2906,6 +2963,7 @@ export default function App() {
                     <SelectContent><SelectItem value="0.25">0.25×</SelectItem><SelectItem value="0.5">0.5×</SelectItem><SelectItem value="1">1×</SelectItem><SelectItem value="1.5">1.5×</SelectItem><SelectItem value="2">2×</SelectItem></SelectContent>
                   </Select>
                 </div>
+                {animationDetails && activeAnimation.kind === 'motion' && <p className="text-xs text-muted-foreground">{motionRepeat === 'forever' ? 'Repeats continuously' : motionRepeat && motionRepeat > 1 ? `Repeats ${motionRepeat} times` : 'Plays once'}. Pause keeps the current pose. Dragging a part pauses playback.</p>}
             </ResponsivePanel>
           )}
 

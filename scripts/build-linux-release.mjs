@@ -17,6 +17,10 @@ if (args[0] === '--plan') {
   process.exit(0);
 }
 if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('Build on Linux x64; cross-platform package creation is not claimed.');
+const osRelease = await readFile('/etc/os-release', 'utf8');
+if (!/^ID=ubuntu$/m.test(osRelease) || !/^VERSION_ID="24\.04"$/m.test(osRelease)) {
+  throw new Error('These candidates target Ubuntu 24.04 OCCT packages. Use Ubuntu 24.04 to build; other distributions require separate dependency review.');
+}
 function run(command, arguments_) {
   const result = spawnSync(command, arguments_, { cwd: root, stdio: 'inherit', env: process.env });
   if (result.error) throw result.error;

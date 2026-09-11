@@ -1,9 +1,17 @@
 import { Group, Matrix4, Vector3, type Object3D } from 'three';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
+import type { Texture } from 'three';
+import { applyMaterialImages } from './materialImages';
 import { validateJoint, type Kea3dJoint, type Kea3dProjectDocument } from './projectFormat';
 import { discoverComponentAnchorDetails, promoteLegacyNamedAnchors } from './componentAnchors';
 
-const bindings = new WeakMap<Object3D, { instance: string; target: Matrix4; sourceInverse: Matrix4 }>();
+const bindings = new WeakMap<Object3D, { instance: string; target: Matrix4; sourceInverse: Matrix4; position?: number }>();
+const components = new WeakMap<Object3D, Map<string, { prototype: Object3D; component: Object3D }>>();
+export function assemblyComponents(root: Object3D) { return components.get(root); }
+export function assemblyJointPosition(root: Object3D, instance: string): number | undefined {
+  const object = assemblyObjectForInstance(root, instance);
+  return object ? bindings.get(object)?.position : undefined;
+}
 
 export function assemblyObjectForInstance(root: Object3D, instance: string): Object3D | undefined {
   let result: Object3D | undefined;
@@ -39,6 +47,7 @@ export function applyAssemblyJoint(root: Object3D, instance: string, value?: Kea
     const binding = bindings.get(group);
     if (!binding || binding.instance !== instance) return;
     found = true;
+    binding.position = joint?.state.position;
     const motion = new Matrix4();
     if (joint) {
       const axis = new Vector3(joint.axis === 'x' ? 1 : 0, joint.axis === 'y' ? 1 : 0, joint.axis === 'z' ? 1 : 0);
@@ -72,11 +81,20 @@ function requiredAnchor(
 export function buildFixedAssemblyScene(
   project: Kea3dProjectDocument,
   resourceScenes: ReadonlyMap<string, Object3D>,
+  images: ReadonlyMap<string, Texture> = new Map(),
 ): Group {
   const assembly = new Group();
   assembly.name = project.name;
   const anchorsByResource = new Map<string, Map<string, Matrix4>>();
   const groupsByInstance = new Map<string, Group>();
+  const parts = new Map<string, { prototype: Object3D; component: Object3D }>();
+  components.set(assembly, parts);
+
+  for (const instance of project.instances) {
+    const prototype = resourceScenes.get(instance.resource);
+    if (!prototype) throw new Error(`Project resource "${instance.resource}" was not loaded.`);
+    applyMaterialImages(prototype, instance, images, true);
+  }
 
   for (const instance of project.instances) {
     const prototype = resourceScenes.get(instance.resource);
@@ -86,7 +104,10 @@ export function buildFixedAssemblyScene(
     }
     const group = new Group();
     group.name = instance.id;
-    group.add(clone(prototype));
+    const component = clone(prototype);
+    parts.set(instance.id, { prototype, component });
+    applyMaterialImages(component, instance, images);
+    group.add(component);
     groupsByInstance.set(instance.id, group);
   }
 

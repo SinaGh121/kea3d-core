@@ -3,6 +3,12 @@
 Target: x86_64 AppImage (portable), DEB (Debian/Ubuntu), RPM (Fedora family).
 These are build candidates, not currently verified public downloads.
 
+The current DEB candidate targets Ubuntu 24.04 x64 specifically, with an explicit
+OCCT 7.6 runtime dependency. Do not advertise it as generic Debian-compatible.
+Candidate CI installs the DEB in a clean Ubuntu container, tests the installed
+CAD worker as an unprivileged user against a read-only colored STEP fixture,
+then uninstalls it. This is not a GUI, AppImage or Fedora acceptance test.
+
 ## Build
 
 Use a Linux x64 build host with the project's pinned npm dependencies, Rust,
