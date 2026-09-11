@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kea3d.com/schemas/project/v2.json",
+  "title": "Kea3D Project v2",
+  "description": "A local, reference-based Kea3D assembly project.",
+  "type": "object",
+  "required": [
+    "$schema",
+    "format",
+    "version",
+    "name",
+    "rootInstance",
+    "resources",
+    "instances"
+  ],
+  "properties": {
+    "motions": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/motion" } },
+    "$schema": {
+      "const": "https://kea3d.com/schemas/project/v2.json"
+    },
+    "format": {
+      "const": "kea3d-project"
+    },
+    "version": {
+      "const": 2
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "rootInstance": {
+      "$ref": "#/$defs/id"
+    },
+    "resources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "instances": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/instance"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "motion": {
+      "type": "object", "required": ["id", "name", "steps"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "repeat": { "oneOf": [{ "const": "forever" }, { "type": "integer", "minimum": 1, "maximum": 10000 }], "default": 1 },
+        "steps": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/motionStep" } }
+      },
+      "description": "View-only motion. Repeat restores the captured displayed baseline; Stop keeps position."
+    },
+    "motionStep": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "steps"], "properties": {
+          "type": { "enum": ["sequence", "parallel"] },
+          "steps": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/motionStep" } }
+        } },
+        { "type": "object", "required": ["type", "durationMs"], "properties": {
+          "type": { "const": "wait" }, "durationMs": { "$ref": "#/$defs/durationMs" }
+        } },
+        { "type": "object", "required": ["type", "instance"], "properties": {
+          "type": { "const": "joint" }, "instance": { "$ref": "#/$defs/id" },
+          "to": { "type": "number", "minimum": -1000000000, "maximum": 1000000000 },
+          "by": { "type": "number", "minimum": -1000000000, "maximum": 1000000000 },
+          "durationMs": { "$ref": "#/$defs/durationMs" },
+          "speed": { "type": "number", "minimum": 0.000000001, "maximum": 1000000000 }
+        }, "allOf": [
+          { "oneOf": [{ "required": ["to"], "not": { "required": ["by"] } }, { "required": ["by"], "not": { "required": ["to"] } }] },
+          { "oneOf": [{ "required": ["durationMs"], "not": { "required": ["speed"] } }, { "required": ["speed"], "not": { "required": ["durationMs"] } }] }
+        ], "description": "Attachment axis only. Metres/radians; speed in units per second. Out-of-range targets are rejected." },
+        { "type": "object", "required": ["type", "instance", "clip", "durationMs"], "properties": {
+          "type": { "const": "frame" }, "instance": { "$ref": "#/$defs/id" },
+          "clip": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "timeMs": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+          "frame": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+          "fps": { "type": "number", "minimum": 0.000001, "maximum": 1000 },
+          "durationMs": { "$ref": "#/$defs/durationMs" }
+        }, "not": { "required": ["speed"] }, "oneOf": [
+          { "required": ["timeMs"], "not": { "anyOf": [{ "required": ["frame"] }, { "required": ["fps"] }] } },
+          { "required": ["frame", "fps"], "not": { "required": ["timeMs"] } }
+        ], "description": "Direct transition to a sampled clip endpoint. Never traverses intermediate clip frames or changes attachment frames." }
+      ]
+    },
+    "durationMs": { "type": "number", "minimum": 0, "maximum": 3600000 },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+    },
+    "resourceUri": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\?#])[A-Za-z0-9 _.,+@()'&-]+(?:/[A-Za-z0-9 _.,+@()'&-]+)*\\.(?:[Gg][Ll][Bb]|[Pp][Nn][Gg]|[Jj][Pp][Ee]?[Gg])$"
+    },
+    "resource": {
+      "type": "object",
+      "required": [
+        "id",
+        "uri"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "uri": {
+          "$ref": "#/$defs/resourceUri"
+        },
+        "integrity": {
+          "$ref": "#/$defs/resourceIntegrity"
+        }
+      },
+      "additionalProperties": true
+    },
+    "resourceIntegrity": {
+      "type": "object",
+      "properties": {
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "byteLength"
+          ]
+        },
+        {
+          "required": [
+            "sha256"
+          ]
+        }
+      ],
+      "additionalProperties": true
+    },
+    "attachment": {
+      "type": "object",
+      "required": [
+        "targetInstance",
+        "targetAnchor"
+      ],
+      "properties": {
+        "sourceAnchor": {
+          "$ref": "#/$defs/id"
+        },
+        "targetInstance": {
+          "$ref": "#/$defs/id"
+        },
+        "targetAnchor": {
+          "$ref": "#/$defs/id"
+        },
+        "joint": {
+          "$ref": "#/$defs/joint"
+        }
+      },
+      "additionalProperties": true
+    },
+    "instance": {
+      "type": "object",
+      "required": [
+        "id",
+        "resource"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "resource": {
+          "$ref": "#/$defs/id"
+        },
+        "materialImages": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["material", "image"],
+            "properties": {
+              "material": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "image": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "attachment": {
+          "$ref": "#/$defs/attachment"
+        }
+      },
+      "additionalProperties": true
+    },
+    "joint": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "axis",
+        "limits",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "enum": [
+            "revolute",
+            "prismatic"
+          ]
+        },
+        "axis": {
+          "enum": [
+            "x",
+            "y",
+            "z"
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "min",
+            "max"
+          ],
+          "properties": {
+            "min": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            }
+          }
+        },
+        "state": {
+          "type": "object",
+          "required": [
+            "position"
+          ],
+          "properties": {
+            "position": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "description": "Radians for rotation, metres for translation. Runtime validates min <= position <= max and unique Joint IDs."
+    }
+  }
+}
